@@ -52,6 +52,7 @@ export STAFF_USER="usuario-da-equipe"
 export STAFF_PASSWORD_HASH="$(python -c 'from werkzeug.security import generate_password_hash; print(generate_password_hash("SENHA-FORTE-AQUI"))')"
 export DATABASE="/caminho/persistente/adelinha.db"
 export PORT=5000
+export COOKIE_SECURE=1
 ```
 
 Execute atrás de HTTPS com um servidor WSGI, por exemplo `gunicorn 'app:create_app()'`. Faça backup frequente do arquivo configurado em `DATABASE`. Para mais de um processo/servidor ou crescimento do uso, migre SQLite para PostgreSQL.
@@ -101,6 +102,19 @@ Essa URL é uma **versão de teste**. Não cadastre CPFs ou documentos reais at�
 6. **Pix**: conta bancária empresarial apta a receber pela chave CNPJ. Eventuais tarifas dependem do banco.
 
 Antes da produção: revise a minuta com profissional jurídico/LGPD, troque as credenciais, restrinja quem acessa o painel, configure HTTPS, backups e política de retenção, e faça teste de restauração. CPF, documentos e assinaturas nunca são mostrados na área pública; por conter dados pessoais, o banco e seus backups devem ter acesso rigorosamente limitado.
+
+## Atualizar no Windows sem perder dados
+
+1. **Pare o sistema** e localize `data\adelinha.db` (ou o caminho definido em `DATABASE`).
+2. Copie esse arquivo para uma pasta segura, com data no nome, por exemplo `Backup\adelinha-2026-09-30.db`. Não continue sem esse backup.
+3. Abra PowerShell na pasta do projeto e execute `git status`. Se houver alterações suas, salve-as com `git add .` e `git commit -m "backup antes da atualização"`.
+4. Execute `git pull origin work` para baixar a nova versão.
+5. Ative o ambiente com `.venv\Scripts\Activate.ps1` e execute `python -m pip install -r requirements.txt`. O pacote `tzdata` agora está incluído para o fuso funcionar no Windows.
+6. Execute `python -m pytest -q`. Depois inicie com `python app.py`.
+7. Na primeira inicialização, a migração adiciona as novas colunas e tabelas sem recriar clientes, IDs, assinaturas, pacotes ou retiradas. Clientes antigos continuam sem senha até a equipe conferir a identidade e gerar o link temporário no cadastro completo.
+8. Confira alguns registros. Se houver problema, pare o sistema e restaure a cópia do banco feita no passo 2.
+
+Nunca substitua nem apague `adelinha.db` durante uma atualização. Faça também uma cópia antes de cada deploy ou mudança de versão.
 
 ## Regras implementadas
 

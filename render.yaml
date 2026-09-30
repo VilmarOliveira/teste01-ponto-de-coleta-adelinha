@@ -17,6 +17,8 @@ services:
         sync: false
       - key: DATABASE
         value: /var/data/adelinha.db
+      - key: COOKIE_SECURE
+        value: "1"
     disk:
       name: adelinha-data
       mountPath: /var/data
