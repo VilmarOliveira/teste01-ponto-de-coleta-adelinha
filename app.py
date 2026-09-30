@@ -99,6 +99,23 @@ def create_app(test_config=None):
             db().execute("DELETE FROM login_attempts WHERE kind=? AND identifier=? AND succeeded=0", (kind, identifier))
         db().commit()
 
+    def find_clients(query):
+        """Usa a mesma fonte e os mesmos critérios em todas as buscas do painel."""
+        query = query.strip()
+        if not query:
+            return []
+        like = f"%{query}%"
+        phone = digits(query)
+        phone_like = f"%{phone}%" if phone else like
+        return db().execute(
+            """SELECT id, public_id, name, phone FROM clients
+               WHERE name LIKE ? COLLATE NOCASE
+                  OR public_id LIKE ? COLLATE NOCASE
+                  OR phone LIKE ?
+               ORDER BY name LIMIT 30""",
+            (like, like, phone_like),
+        ).fetchall()
+
     @app.get("/")
     def index():
         return render_template("index.html")
@@ -222,10 +239,7 @@ def create_app(test_config=None):
     @login_required
     def dashboard():
         query = request.args.get("q", "").strip()
-        clients = []
-        if query:
-            like = f"%{query}%"
-            clients = db().execute("SELECT id, public_id, name, phone FROM clients WHERE name LIKE ? OR public_id LIKE ? OR phone LIKE ? ORDER BY name LIMIT 30", (like, like, like)).fetchall()
+        clients = find_clients(query)
         packages = db().execute("""
             SELECT p.*, c.name client_name, c.public_id client_public_id, c.phone
             FROM packages p JOIN clients c ON c.id=p.client_id
@@ -233,6 +247,12 @@ def create_app(test_config=None):
         """).fetchall()
         rows = [{**dict(p), **fees(p)} for p in packages]
         return render_template("dashboard.html", clients=clients, packages=rows, q=query, pix=PIX_KEY)
+
+    @app.get("/painel/clientes/busca")
+    @login_required
+    def client_search():
+        clients = find_clients(request.args.get("q", ""))
+        return {"clients": [dict(client) for client in clients]}
 
     @app.get("/painel/clientes/<int:client_id>")
     @login_required
@@ -283,9 +303,17 @@ def create_app(test_config=None):
         try:
             dimensions = [float(request.form[k].replace(",", ".")) for k in ("width", "height", "length")]
             weight = float(request.form["weight"].replace(",", "."))
-            client_id = int(request.form["client_id"])
         except (ValueError, KeyError):
             flash("Informe medidas e peso válidos.", "error")
+            return redirect(url_for("dashboard"))
+        try:
+            client_id = int(request.form.get("client_id", ""))
+        except ValueError:
+            flash("Selecione um cliente válido antes de registrar o pacote.", "error")
+            return redirect(url_for("dashboard"))
+        selected_client = db().execute("SELECT id,name,public_id FROM clients WHERE id=?", (client_id,)).fetchone()
+        if not selected_client:
+            flash("Selecione um cliente válido antes de registrar o pacote.", "error")
             return redirect(url_for("dashboard"))
         try:
             category, price = classify_package(*dimensions, weight)

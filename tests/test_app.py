@@ -51,6 +51,43 @@ def test_dashboard_requires_login(client):
     assert "/login" in response.headers["Location"]
 
 
+def test_package_form_search_select_and_register_flow(app, client):
+    register(client, "Maria da Silva")
+    login(client)
+
+    for query in ("Maria", "da Silva", "ADL-000001", "(16) 99999-9999"):
+        response = client.get("/painel/clientes/busca", query_string={"q": query})
+        assert response.status_code == 200
+        assert response.json["clients"][0]["id"] == 1
+        assert response.json["clients"][0]["name"] == "Maria da Silva"
+        assert response.json["clients"][0]["public_id"] == "ADL-000001"
+
+    selected_id = client.get("/painel/clientes/busca", query_string={"q": "Maria"}).json["clients"][0]["id"]
+    response = client.post("/pacotes", data={
+        "client_id": selected_id,
+        "width": "20",
+        "height": "20",
+        "length": "20",
+        "weight": "2",
+        "shelf": "B-02",
+        "csrf_token": token(client),
+    }, follow_redirects=True)
+    assert "PCT-000001 registrado como Pequeno" in response.text
+    connection = sqlite3.connect(app.config["DATABASE"])
+    assert connection.execute("SELECT client_id FROM packages WHERE public_id='PCT-000001'").fetchone()[0] == 1
+
+
+def test_package_registration_rejects_missing_or_unknown_client(client):
+    login(client)
+    for client_id in ("", "999999"):
+        response = client.post("/pacotes", data={
+            "client_id": client_id,
+            "width": "20", "height": "20", "length": "20", "weight": "2", "shelf": "B-02",
+            "csrf_token": token(client),
+        }, follow_redirects=True)
+        assert "cliente válido" in response.text
+
+
 @pytest.mark.parametrize("width,height,length,weight,category", [
     (30, 25, 25, 10, "Pequeno"),
     (30, 25, 25.01, 10, "Grande"),
