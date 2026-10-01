@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from core import calculate_fees, classify_package
+from core import calculate_fees, classify_package, pix_payload
 
 
 @pytest.mark.parametrize("dimensions,weight,expected", [
@@ -31,3 +31,12 @@ def test_calendar_day_fees_and_pickup_freeze():
     assert calculate_fees(5, notice, today=date(2026, 9, 16))["late_fee"] == 1.5
     frozen = calculate_fees(5, notice, "2026-09-14T19:00:00-03:00", today=None)
     assert frozen["total"] == 5.5
+
+
+def test_pix_payload_has_key_amount_and_valid_crc():
+    payload = pix_payload("38145273000105", "Recebedor Teste", 15.50)
+    assert payload.startswith("000201")
+    assert "38145273000105" in payload
+    assert "540515.50" in payload
+    assert payload[-8:-4] == "6304"
+    assert len(payload[-4:]) == 4

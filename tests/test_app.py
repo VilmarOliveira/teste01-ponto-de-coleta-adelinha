@@ -69,7 +69,7 @@ def test_package_form_search_select_and_register_flow(app, client):
         "height": "20",
         "length": "20",
         "weight": "2",
-        "shelf": "B-02",
+        "shelf": "B02", "tracking": "TRK001",
         "csrf_token": token(client),
     }, follow_redirects=True)
     assert "PCT-000001 registrado como Pequeno" in response.text
@@ -82,7 +82,7 @@ def test_package_registration_rejects_missing_or_unknown_client(client):
     for client_id in ("", "999999"):
         response = client.post("/pacotes", data={
             "client_id": client_id,
-            "width": "20", "height": "20", "length": "20", "weight": "2", "shelf": "B-02",
+            "width": "20", "height": "20", "length": "20", "weight": "2", "shelf": "B02", "tracking": "TRK001",
             "csrf_token": token(client),
         }, follow_redirects=True)
         assert "cliente válido" in response.text
@@ -96,7 +96,7 @@ def test_package_registration_rejects_missing_or_unknown_client(client):
 def test_package_category_boundaries(app, client, width, height, length, weight, category):
     register(client)
     login(client)
-    response = client.post("/pacotes", data={"client_id": 1, "width": width, "height": height, "length": length, "weight": weight, "shelf": "A1", "csrf_token": token(client)}, follow_redirects=True)
+    response = client.post("/pacotes", data={"client_id": 1, "width": width, "height": height, "length": length, "weight": weight, "shelf": "A1", "tracking": "TRK001", "csrf_token": token(client)}, follow_redirects=True)
     assert response.status_code == 200
     assert category.encode() in response.data
 
@@ -105,7 +105,7 @@ def test_package_category_boundaries(app, client, width, height, length, weight,
 def test_oversized_package_is_blocked(client, dimensions, weight):
     register(client)
     login(client)
-    response = client.post("/pacotes", data={"client_id": 1, "width": dimensions[0], "height": dimensions[1], "length": dimensions[2], "weight": weight, "shelf": "A1", "csrf_token": token(client)}, follow_redirects=True)
+    response = client.post("/pacotes", data={"client_id": 1, "width": dimensions[0], "height": dimensions[1], "length": dimensions[2], "weight": weight, "shelf": "A1", "tracking": "TRK001", "csrf_token": token(client)}, follow_redirects=True)
     assert "Pacote recusado" in response.text
 
 
@@ -120,27 +120,27 @@ def test_partial_pickup_and_duplicate_protection(app, client):
     register(client)
     login(client)
     for shelf in ("A1", "A2"):
-        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "csrf_token": token(client)})
+        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "tracking": "TRK001", "csrf_token": token(client)})
     client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
     client.post("/pacotes/2/avisar", data={"csrf_token": token(client)})
-    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Maria", "receiver_document": "RG 1", "pickup_signature": signature(), "csrf_token": token(client)})
+    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Maria", "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)})
     assert response.status_code == 302
     connection = sqlite3.connect(app.config["DATABASE"])
     statuses = [row[0] for row in connection.execute("SELECT status FROM packages ORDER BY id")]
     assert statuses == ["retirado", "aguardando_retirada"]
-    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Maria", "receiver_document": "RG 1", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
+    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Maria", "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
     assert "já possui uma retirada registrada" in response.text
 
 
 def test_duplicate_package_ids_are_processed_once(app, client):
     register(client)
     login(client)
-    client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": "A1", "csrf_token": token(client)})
+    client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": "A1", "tracking": "TRK001", "csrf_token": token(client)})
     client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
 
     response = client.post("/retiradas", data={
         "package_ids": ["1", "1"], "receiver_name": "Cliente Teste",
-        "receiver_document": "CPF 123", "pickup_signature": signature(),
+        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(),
         "csrf_token": token(client),
     })
     assert response.status_code == 302
@@ -153,7 +153,7 @@ def test_duplicate_package_ids_are_processed_once(app, client):
 def test_dashboard_renders_one_package_section_and_one_package_card(client):
     register(client)
     login(client)
-    client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": "A1", "csrf_token": token(client)})
+    client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": "A1", "tracking": "TRK001", "csrf_token": token(client)})
     response = client.get("/painel")
     assert response.text.count("<h2>Pacotes</h2>") == 1
     # O ID aparece no cartão e no link/URL, mas existe somente um article do pacote.
@@ -163,9 +163,9 @@ def test_dashboard_renders_one_package_section_and_one_package_card(client):
 def test_second_pickup_shows_existing_receipt_without_new_rows(app, client):
     register(client)
     login(client)
-    client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": "A1", "csrf_token": token(client)})
+    client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": "A1", "tracking": "TRK001", "csrf_token": token(client)})
     client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
-    payload = {"package_ids": "1", "receiver_name": "Cliente Teste", "receiver_document": "CPF 123", "pickup_signature": signature(), "csrf_token": token(client)}
+    payload = {"package_ids": "1", "receiver_name": "Cliente Teste", "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)}
     client.post("/retiradas", data=payload)
 
     response = client.post("/retiradas", data=payload, follow_redirects=True)
@@ -180,13 +180,13 @@ def test_normal_pickup_of_multiple_distinct_packages_is_atomic(app, client):
     register(client)
     login(client)
     for shelf in ("A1", "A2"):
-        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "csrf_token": token(client)})
+        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "tracking": "TRK001", "csrf_token": token(client)})
     for package_id in (1, 2):
         client.post(f"/pacotes/{package_id}/avisar", data={"csrf_token": token(client)})
 
     response = client.post("/retiradas", data={
         "package_ids": ["1", "2"], "receiver_name": "Terceiro",
-        "receiver_document": "RG 999", "pickup_signature": signature(),
+        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(),
         "csrf_token": token(client),
     })
     assert response.status_code == 302
@@ -200,7 +200,7 @@ def test_pickup_rolls_back_every_change_when_a_link_fails(app, client):
     register(client)
     login(client)
     for shelf in ("A1", "A2"):
-        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "csrf_token": token(client)})
+        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "tracking": "TRK001", "csrf_token": token(client)})
     for package_id in (1, 2):
         client.post(f"/pacotes/{package_id}/avisar", data={"csrf_token": token(client)})
 
@@ -211,7 +211,7 @@ def test_pickup_rolls_back_every_change_when_a_link_fails(app, client):
 
     response = client.post("/retiradas", data={
         "package_ids": ["1", "2"], "receiver_name": "Cliente Teste",
-        "receiver_document": "CPF 123", "pickup_signature": signature(),
+        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(),
         "csrf_token": token(client),
     }, follow_redirects=True)
     assert "Nenhuma alteração foi salva" in response.text
@@ -223,6 +223,51 @@ def test_pickup_rolls_back_every_change_when_a_link_fails(app, client):
 
 def test_csrf_is_required(client):
     assert client.post("/cadastro", data={}).status_code == 400
+
+
+def test_package_error_preserves_form_and_edit_is_blocked_after_notice(app, client):
+    register(client)
+    login(client)
+    invalid = {"client_id": 1, "client_label": "Cliente Teste · ADL-000001", "tracking": "000123", "shelf": "A01",
+        "width": "100", "height": "40", "length": "20", "weight": "2", "csrf_token": token(client)}
+    response = client.post("/pacotes", data=invalid, follow_redirects=True)
+    assert "Pacote recusado: Limite de 150 cm na soma e 20 kg." in response.text
+    assert 'value="000123"' in response.text and 'value="100"' in response.text
+    assert sqlite3.connect(app.config["DATABASE"]).execute("SELECT COUNT(*) FROM packages").fetchone()[0] == 0
+
+    valid = {**invalid, "width": "20", "height": "20", "length": "20", "weight": "2", "csrf_token": token(client)}
+    client.post("/pacotes", data=valid)
+    client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
+    response = client.post("/painel/pacotes/1/editar", data=valid, follow_redirects=True)
+    assert "não pode mais ser editado" in response.text
+
+
+def test_admin_edits_client_changes_password_and_deactivates_with_history(app, client):
+    register(client)
+    login(client)
+    response = client.post("/painel/clientes/1/editar", data={"name": "Nome Atualizado", "cpf": "123.456.789-01", "phone": "16988887777", "csrf_token": token(client)}, follow_redirects=True)
+    assert "Cadastro atualizado" in response.text
+    client.post("/painel/clientes/1/senha", data={"password": "senha-nova", "password_confirm": "senha-nova", "csrf_token": token(client)})
+    response = client.post("/painel/clientes/1/remover", data={"confirmation": "ADL-000001", "csrf_token": token(client)}, follow_redirects=True)
+    assert "Cliente desativado" in response.text
+    connection = sqlite3.connect(app.config["DATABASE"])
+    assert connection.execute("SELECT name,active,session_version FROM clients").fetchone() == ("Nome Atualizado", 0, 3)
+    actions = [row[0] for row in connection.execute("SELECT action FROM audit_logs ORDER BY id")]
+    assert actions == ["editar", "alterar_senha", "desativar"]
+
+
+def test_cash_pickup_saves_document_and_payment_confirmation(app, client):
+    register(client)
+    login(client)
+    client.post("/pacotes", data={"client_id": 1, "tracking": "001ABC", "shelf": "A1", "width": 10, "height": 10, "length": 10, "weight": 1, "csrf_token": token(client)})
+    client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
+    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Terceiro", "document_type": "RG",
+        "receiver_document": "12.345.678-X", "payment_method": "Dinheiro", "payment_confirmed": "yes",
+        "pickup_signature": signature(), "csrf_token": token(client)})
+    assert response.status_code == 302
+    row = sqlite3.connect(app.config["DATABASE"]).execute("SELECT document_type,receiver_document,payment_method,payment_confirmed_at,payment_confirmed_by FROM pickups").fetchone()
+    assert row[:3] == ("RG", "12.345.678-X", "Dinheiro")
+    assert row[3] and row[4] == "staff"
 
 
 def test_terms_acceptance_is_required(client):
@@ -293,20 +338,20 @@ def test_expired_password_link_is_rejected(app, client):
 
 
 @pytest.mark.parametrize("receiver,document", [
-    ("Cliente Teste", "CPF 12345678901"),
-    ("Terceiro Autorizado", "RG 998877"),
+    ("Cliente Teste", "12345678901"),
+    ("Terceiro Autorizado", "98765432100"),
 ])
 def test_withdrawal_snapshot_detail_restart_and_pdf(app, client, receiver, document):
     register(client)
     login(client)
     client.post("/pacotes", data={
         "client_id": 1, "width": 10, "height": 10, "length": 10,
-        "weight": 1, "shelf": "A1", "csrf_token": token(client),
+        "weight": 1, "shelf": "A1", "tracking": "TRK001", "csrf_token": token(client),
     })
     client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
     response = client.post("/retiradas", data={
         "package_ids": "1", "receiver_name": receiver,
-        "receiver_document": document, "pickup_signature": signature(),
+        "receiver_document": document, "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(),
         "csrf_token": token(client),
     })
     assert response.status_code == 302

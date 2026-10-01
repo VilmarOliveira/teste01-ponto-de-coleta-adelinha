@@ -4,6 +4,7 @@ Manter os cálculos aqui permite testá-los mesmo em um ambiente sem Flask.
 """
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
+import unicodedata
 
 TZ = ZoneInfo("America/Sao_Paulo")
 
@@ -36,3 +37,24 @@ def calculate_fees(base_price, notified_at=None, picked_at=None, today: date | N
         late_days = max(0, (reference - last_free_date).days)
     late_fee = late_days * 0.5
     return {"base": base, "late_days": late_days, "late_fee": late_fee, "total": base + late_fee}
+
+
+def _emv_field(identifier, value):
+    return f"{identifier}{len(value):02d}{value}"
+
+
+def pix_payload(key, receiver_name, amount):
+    """Gera um BR Code Pix estático com CRC16-CCITT."""
+    if not receiver_name or amount <= 0:
+        raise ValueError("Nome do recebedor e valor são obrigatórios.")
+    receiver = unicodedata.normalize("NFKD", receiver_name).encode("ascii", "ignore").decode().strip().upper()[:25]
+    merchant = _emv_field("00", "BR.GOV.BCB.PIX") + _emv_field("01", key)
+    payload = "".join((_emv_field("00", "01"), _emv_field("26", merchant), _emv_field("52", "0000"),
+        _emv_field("53", "986"), _emv_field("54", f"{amount:.2f}"), _emv_field("58", "BR"),
+        _emv_field("59", receiver), _emv_field("60", "FRANCA"), _emv_field("62", _emv_field("05", "***")), "6304"))
+    crc = 0xFFFF
+    for byte in payload.encode("utf-8"):
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return payload + f"{crc:04X}"

@@ -118,6 +118,14 @@ Nunca substitua nem apague `adelinha.db` durante uma atualização. Faça també
 
 Nesta atualização, a inicialização também acrescenta os campos de histórico do comprovante. Novas retiradas passam a guardar uma fotografia dos IDs, nome do cliente, valores, atraso e pagamento. Retiradas antigas são preservadas; campos que nunca foram gravados aparecem como **“Não registrado”**. A geração do PDF usa `reportlab`, instalado automaticamente pelo `requirements.txt`.
 
+### Configuração obrigatória do Pix
+
+Depois de atualizar, entre na **Área da agência**, vá até **Configuração do Pix** e informe o nome do recebedor exatamente como está cadastrado no banco. O sistema não inventa esse nome e bloqueia a confirmação por Pix enquanto ele estiver vazio. A chave CNPJ já está configurada como `38145273000105`. O QR Code é gerado localmente para o valor exato da retirada; a conferência do crédito continua sendo manual.
+
+### O que a migração preserva
+
+A inicialização acrescenta, sem apagar tabelas, os campos de cliente ativo e versão de sessão, tipo de documento, confirmação de pagamento, auditoria e configuração Pix. Contratos, IDs, assinaturas, pacotes, retiradas e comprovantes existentes permanecem no mesmo banco. Informações que não eram gravadas em registros antigos aparecem como **Não registrado**.
+
 ## Regras implementadas
 
 - ID de cliente `ADL-000001` e pacote `PCT-000001` sequenciais.
@@ -125,5 +133,5 @@ Nesta atualização, a inicialização também acrescenta os campos de históric
 - Pequeno: soma ≤ 80 cm **e** peso ≤ 10 kg; grande: soma ≤ 150 cm **e** peso ≤ 20 kg; acima disso é recusado.
 - Confirmação explícita inicia o prazo; abrir/reabrir WhatsApp não o altera.
 - O dia do aviso é o primeiro dos quatro; R$ 0,50 por data corrida desde o quinto dia.
-- Retirada total ou parcial, com conferência manual do Pix, identificação e assinatura; pacote retirado não pode ser retirado novamente.
+- Retirada total ou parcial, por Pix ou dinheiro com confirmação manual, identificação e assinatura; pacote retirado não pode ser retirado novamente.
 - Comprovante persistente e imprimível/salvável em PDF pelo navegador.
