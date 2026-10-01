@@ -12,6 +12,7 @@ from flask import Flask, abort, flash, redirect, render_template, request, send_
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from core import TZ, calculate_fees, classify_package
@@ -233,6 +234,7 @@ def create_app(test_config=None):
         if not pickup:
             abort(404)
         packages = db().execute("SELECT p.id package_id,p.public_id,pp.base_amount,pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=? AND p.client_id=?", (pickup_id, session["client_id"])).fetchall()
+        packages = db().execute("SELECT p.public_id,pp.base_amount,pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=? AND p.client_id=?", (pickup_id, session["client_id"])).fetchall()
         return render_template("receipt.html", pickup=pickup, packages=packages, pix=PIX_KEY, client_copy=True)
 
     @app.post("/sair")
@@ -386,6 +388,11 @@ def create_app(test_config=None):
                 pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,
                 service_amount,late_days,total_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                 (pickup_id, package["id"], total["base"], total["late_fee"], package["public_id"], owner["id"], owner["name"], owner["public_id"], total["base"], total["late_days"], total["total"]))
+        cur = db().execute("INSERT INTO pickups(receiver_name, receiver_document, signature, staff, picked_at, base_total, late_total, total_paid, payment_confirmed) VALUES(?,?,?,?,?,?,?,?,1)",
+            (receiver, document, signature, session["staff"], picked_at, sum(x["base"] for x in totals), sum(x["late_fee"] for x in totals), sum(x["total"] for x in totals)))
+        pickup_id = cur.lastrowid
+        for package, total in zip(packages, totals):
+            db().execute("INSERT INTO pickup_packages(pickup_id, package_id, base_amount, late_amount) VALUES(?,?,?,?)", (pickup_id, package["id"], total["base"], total["late_fee"]))
             db().execute("UPDATE packages SET status='retirado', picked_at=? WHERE id=?", (picked_at, package["id"]))
         db().commit()
         return redirect(url_for("receipt", pickup_id=pickup_id))
@@ -413,6 +420,9 @@ def create_app(test_config=None):
         filename = f"comprovante-{row['package_public_id'] or package_id}.pdf"
         return send_file(pdf, mimetype="application/pdf", as_attachment=True, download_name=filename)
 
+        packages = db().execute("SELECT p.public_id, pp.base_amount, pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=?", (pickup_id,)).fetchall()
+        return render_template("receipt.html", pickup=pickup, packages=packages, pix=PIX_KEY)
+
     with app.app_context():
         init_db(app.config["DATABASE"])
     return app
@@ -434,6 +444,8 @@ def init_db(path):
     CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, client_id INTEGER NOT NULL REFERENCES clients(id), tracking TEXT, width REAL NOT NULL, height REAL NOT NULL, length REAL NOT NULL, weight REAL NOT NULL, shelf TEXT, category TEXT NOT NULL, base_price REAL NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, notified_at TEXT, picked_at TEXT);
     CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_method TEXT, payment_confirmed INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id INTEGER REFERENCES pickups(id), package_id INTEGER UNIQUE REFERENCES packages(id), base_amount REAL NOT NULL, late_amount REAL NOT NULL, package_public_id TEXT, client_id INTEGER, client_name TEXT, client_public_id TEXT, service_amount REAL, late_days INTEGER, total_amount REAL, PRIMARY KEY(pickup_id, package_id));
+    CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_confirmed INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id INTEGER REFERENCES pickups(id), package_id INTEGER UNIQUE REFERENCES packages(id), base_amount REAL NOT NULL, late_amount REAL NOT NULL, PRIMARY KEY(pickup_id, package_id));
     CREATE TABLE IF NOT EXISTS password_tokens (id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL REFERENCES clients(id), token_hash TEXT UNIQUE NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, used_at TEXT);
     CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, identifier TEXT NOT NULL, succeeded INTEGER NOT NULL, attempted_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(kind,identifier,attempted_at);

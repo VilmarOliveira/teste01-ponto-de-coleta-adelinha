@@ -20,6 +20,7 @@ def client(app):
 
 def signature():
     return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    return "data:image/png;base64,aGVsbG8="
 
 
 def token(client):
