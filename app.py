@@ -22,7 +22,10 @@ from core import TZ, calculate_fees, classify_package, pix_payload
 ROOT = Path(__file__).parent
 TERMS_VERSION = "MINUTA-TESTE-v1"
 PIX_KEY = "38145273000105"
-ADDRESS = "Rua Afonso Borges de Freitas, 795, Jardim Adelinha, Franca/SP, CEP 14406-848"
+PIX_RECEIVER_NAME = "AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS"
+# O CEP não é exibido aqui porque não foi confirmado para o endereço de retirada.
+PICKUP_ADDRESS = "RUA AFONSO BORGES DE FREITAS, 795, JARDIM ADELINHA, FRANCA – SP"
+ADDRESS = PICKUP_ADDRESS  # compatibilidade com comprovantes e integrações existentes
 
 
 def terms_text():
@@ -96,7 +99,8 @@ def create_app(test_config=None):
 
     @app.context_processor
     def shared_values():
-        return {"csrf_token": session.get("csrf_token"), "address": ADDRESS}
+        return {"csrf_token": session.get("csrf_token"), "address": PICKUP_ADDRESS,
+                "pickup_address": PICKUP_ADDRESS, "pix_receiver_name_full": PIX_RECEIVER_NAME}
 
     @app.template_filter("local_datetime")
     def local_datetime(value):
@@ -111,6 +115,18 @@ def create_app(test_config=None):
     def package_form_data():
         return {key: request.form.get(key, "") for key in ("client_id", "client_label", "tracking", "shelf", "weight", "width", "height", "length")}
 
+    def residential_address_form():
+        return {key: request.form.get(key, "").strip() for key in
+                ("residential_cep", "residential_street", "residential_number",
+                 "residential_district", "residential_city", "residential_state",
+                 "residential_complement")}
+
+    def valid_residential_address(data):
+        required = ("residential_street", "residential_number", "residential_district", "residential_city")
+        return (len(digits(data["residential_cep"])) == 8
+                and all(data[field] for field in required)
+                and bool(re.fullmatch(r"[A-Za-z]{2}", data["residential_state"])))
+
     def validate_package_form():
         data = package_form_data()
         tracking, shelf = data["tracking"].strip(), data["shelf"].strip()
@@ -120,7 +136,7 @@ def create_app(test_config=None):
             client_id = int(data["client_id"])
             numbers = [float(data[key].replace(",", ".")) for key in ("width", "height", "length", "weight")]
         except (ValueError, TypeError):
-            raise ValueError("Selecione um cliente e informe peso e medidas numéricos.")
+            raise ValueError("Selecione um cliente válido e informe peso e medidas numéricos.")
         if not all(math.isfinite(value) and value > 0 for value in numbers):
             raise ValueError("Peso e medidas devem ser números maiores que zero.")
         client = db().execute("SELECT id,name,public_id FROM clients WHERE id=? AND active=1", (client_id,)).fetchone()
@@ -175,19 +191,26 @@ def create_app(test_config=None):
         phone = digits(request.form.get("phone", ""))
         signature = request.form.get("signature", "")
         password = request.form.get("password", "")
+        residential = residential_address_form()
         if request.form.get("terms_accept") != "yes":
             flash("É necessário aceitar as condições do serviço.", "error")
             return redirect(url_for("index") + "#cadastro")
-        if len(name) < 5 or len(cpf) != 11 or len(phone) < 10 or not signature.startswith("data:image/png;base64,") or len(password) < 8 or password != request.form.get("password_confirm"):
-            flash("Confira os dados, a assinatura e as senhas (mínimo de 8 caracteres).", "error")
-            return redirect(url_for("index") + "#cadastro")
+        if len(name) < 5 or len(cpf) != 11 or len(phone) < 10 or not signature.startswith("data:image/png;base64,") or len(password) < 8 or password != request.form.get("password_confirm") or not valid_residential_address(residential):
+            flash("Confira os dados, o endereço residencial obrigatório, a assinatura e as senhas (mínimo de 8 caracteres).", "error")
+            form = {"name": name, "cpf": request.form.get("cpf", ""), "phone": request.form.get("phone", ""), **residential}
+            return render_template("index.html", registration_form=form), 400
         accepted_at = now().isoformat()
         if db().execute("SELECT 1 FROM clients WHERE cpf=?", (cpf,)).fetchone():
             flash("Já existe cadastro com este CPF. Procure a equipe para recuperar a senha.", "error")
             return redirect(url_for("client_login"))
         cur = db().execute(
-            "INSERT INTO clients(name, cpf, phone, terms_version, terms_text, signature, accepted_at, password_hash) VALUES(?,?,?,?,?,?,?,?)",
-            (name, cpf, phone, TERMS_VERSION, terms_text(), signature, accepted_at, generate_password_hash(password)),
+            """INSERT INTO clients(name, cpf, phone, terms_version, terms_text, signature, accepted_at, password_hash,
+               residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (name, cpf, phone, TERMS_VERSION, terms_text(), signature, accepted_at, generate_password_hash(password),
+             digits(residential["residential_cep"]), residential["residential_street"], residential["residential_number"],
+             residential["residential_district"], residential["residential_city"], residential["residential_state"].upper(),
+             residential["residential_complement"] or None),
         )
         client_id = cur.lastrowid
         public_id = f"ADL-{client_id:06d}"
@@ -323,11 +346,16 @@ def create_app(test_config=None):
             abort(404)
         name = request.form.get("name", "").strip()
         cpf, phone = digits(request.form.get("cpf", "")), digits(request.form.get("phone", ""))
+        residential = residential_address_form()
         duplicate = db().execute("SELECT 1 FROM clients WHERE cpf=? AND id!=?", (cpf, client_id)).fetchone()
-        if len(name) < 5 or len(cpf) != 11 or len(phone) < 10 or duplicate:
-            flash("Confira nome, CPF e WhatsApp. O CPF não pode estar em outro cadastro.", "error")
+        if len(name) < 5 or len(cpf) != 11 or len(phone) < 10 or duplicate or not valid_residential_address(residential):
+            flash("Confira nome, CPF, WhatsApp e todos os campos obrigatórios do endereço residencial. O CPF não pode estar em outro cadastro.", "error")
             return redirect(url_for("staff_client", client_id=client_id))
-        db().execute("UPDATE clients SET name=?,cpf=?,phone=? WHERE id=?", (name, cpf, phone, client_id))
+        db().execute("""UPDATE clients SET name=?,cpf=?,phone=?,residential_cep=?,residential_street=?,residential_number=?,
+            residential_district=?,residential_city=?,residential_state=?,residential_complement=? WHERE id=?""",
+            (name, cpf, phone, digits(residential["residential_cep"]), residential["residential_street"],
+             residential["residential_number"], residential["residential_district"], residential["residential_city"],
+             residential["residential_state"].upper(), residential["residential_complement"] or None, client_id))
         audit("editar", "cliente", client_id, "nome, CPF ou telefone atualizados")
         db().commit()
         flash("Cadastro atualizado. Contratos e comprovantes históricos não foram alterados.", "success")
@@ -377,8 +405,7 @@ def create_app(test_config=None):
     @app.post("/painel/configuracoes/pix")
     @login_required
     def pix_settings():
-        name = request.form.get("pix_receiver_name", "").strip()
-        db().execute("UPDATE settings SET pix_receiver_name=? WHERE id=1", (name or None,))
+        db().execute("UPDATE settings SET pix_receiver_name=? WHERE id=1", (PIX_RECEIVER_NAME,))
         audit("configurar_pix", "configuracao", 1, "nome do recebedor atualizado")
         db().commit()
         flash("Configuração Pix atualizada.", "success")
@@ -690,7 +717,7 @@ def init_db(path):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
     connection.executescript("""
-    CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, name TEXT NOT NULL, cpf TEXT NOT NULL, phone TEXT NOT NULL, terms_version TEXT NOT NULL, terms_text TEXT, signature TEXT NOT NULL, accepted_at TEXT NOT NULL, password_hash TEXT, active INTEGER NOT NULL DEFAULT 1, session_version INTEGER NOT NULL DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, name TEXT NOT NULL, cpf TEXT NOT NULL, phone TEXT NOT NULL, terms_version TEXT NOT NULL, terms_text TEXT, signature TEXT NOT NULL, accepted_at TEXT NOT NULL, password_hash TEXT, active INTEGER NOT NULL DEFAULT 1, session_version INTEGER NOT NULL DEFAULT 1, residential_cep TEXT, residential_street TEXT, residential_number TEXT, residential_district TEXT, residential_city TEXT, residential_state TEXT, residential_complement TEXT);
     CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, client_id INTEGER NOT NULL REFERENCES clients(id), tracking TEXT, width REAL NOT NULL, height REAL NOT NULL, length REAL NOT NULL, weight REAL NOT NULL, shelf TEXT, category TEXT NOT NULL, base_price REAL NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, notified_at TEXT, picked_at TEXT);
     CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, document_type TEXT, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_method TEXT, payment_confirmed INTEGER NOT NULL, payment_confirmed_at TEXT, payment_confirmed_by TEXT);
     CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id INTEGER REFERENCES pickups(id), package_id INTEGER UNIQUE REFERENCES packages(id), base_amount REAL NOT NULL, late_amount REAL NOT NULL, package_public_id TEXT, client_id INTEGER, client_name TEXT, client_public_id TEXT, tracking_code TEXT, package_category TEXT, notified_at TEXT, service_amount REAL, late_days INTEGER, total_amount REAL, PRIMARY KEY(pickup_id, package_id));
@@ -699,20 +726,25 @@ def init_db(path):
     CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(kind,identifier,attempted_at);
     CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY, actor TEXT NOT NULL, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id INTEGER, details TEXT, created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), pix_receiver_name TEXT);
-    INSERT OR IGNORE INTO settings(id,pix_receiver_name) VALUES(1,NULL);
+    INSERT OR IGNORE INTO settings(id,pix_receiver_name) VALUES(1,'AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS');
     """)
     columns = {row[1] for row in connection.execute("PRAGMA table_info(clients)")}
     if "password_hash" not in columns:
         connection.execute("ALTER TABLE clients ADD COLUMN password_hash TEXT")
     if "terms_text" not in columns:
         connection.execute("ALTER TABLE clients ADD COLUMN terms_text TEXT")
-    ensure_columns(connection, "clients", {"active": "INTEGER NOT NULL DEFAULT 1", "session_version": "INTEGER NOT NULL DEFAULT 1"})
+    ensure_columns(connection, "clients", {"active": "INTEGER NOT NULL DEFAULT 1", "session_version": "INTEGER NOT NULL DEFAULT 1",
+        "residential_cep": "TEXT", "residential_street": "TEXT", "residential_number": "TEXT",
+        "residential_district": "TEXT", "residential_city": "TEXT", "residential_state": "TEXT",
+        "residential_complement": "TEXT"})
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT"})
     ensure_columns(connection, "pickup_packages", {
         "package_public_id": "TEXT", "client_id": "INTEGER", "client_name": "TEXT", "client_public_id": "TEXT",
         "tracking_code": "TEXT", "package_category": "TEXT", "notified_at": "TEXT",
         "service_amount": "REAL", "late_days": "INTEGER", "total_amount": "REAL",
     })
+    # O nome completo é mostrado na interface; pix_payload aplica o limite EMV de 25 caracteres.
+    connection.execute("UPDATE settings SET pix_receiver_name=? WHERE id=1", (PIX_RECEIVER_NAME,))
     connection.commit()
     connection.close()
 

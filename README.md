@@ -118,9 +118,13 @@ Nunca substitua nem apague `adelinha.db` durante uma atualização. Faça també
 
 Nesta atualização, a inicialização também acrescenta os campos de histórico do comprovante. Novas retiradas passam a guardar uma fotografia dos IDs, nome do cliente, valores, atraso e pagamento. Retiradas antigas são preservadas; campos que nunca foram gravados aparecem como **“Não registrado”**. A geração do PDF usa `reportlab`, instalado automaticamente pelo `requirements.txt`.
 
-### Configuração obrigatória do Pix
+### Dados do Pix
 
-Depois de atualizar, entre na **Área da agência**, vá até **Configuração do Pix** e informe o nome do recebedor exatamente como está cadastrado no banco. O sistema não inventa esse nome e bloqueia a confirmação por Pix enquanto ele estiver vazio. A chave CNPJ já está configurada como `38145273000105`. O QR Code é gerado localmente para o valor exato da retirada; a conferência do crédito continua sendo manual.
+O titular é **AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS** e a chave CNPJ é `38145273000105`. A tela mostra o nome completo. Ao gerar o QR Code e o Pix Copia e Cola, o sistema aplica automaticamente o limite de 25 caracteres do padrão técnico Pix; a conferência do crédito continua manual.
+
+### Migração dos endereços
+
+A primeira inicialização acrescenta campos separados para o endereço residencial sem apagar registros. Cadastros antigos ficam identificados como **Não cadastrado** até a agência preenchê-los na edição do cliente. Novos cadastros exigem CEP, rua, número, bairro, cidade e estado. O endereço Pickup permanece separado e não é copiado para o endereço residencial.
 
 ### O que a migração preserva
 

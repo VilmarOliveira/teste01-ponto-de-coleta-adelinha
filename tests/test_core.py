@@ -5,6 +5,12 @@ import pytest
 from core import calculate_fees, classify_package, pix_payload
 
 
+def test_pix_limits_long_holder_name_to_emv_standard():
+    payload = pix_payload("38145273000105", "AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS", 5)
+    assert "5925AMOR INFINITO MARKETING" in payload
+    assert "SOLUCOES EMPRESARIAIS" not in payload
+
+
 @pytest.mark.parametrize("dimensions,weight,expected", [
     ((30, 25, 25), 10, ("Pequeno", 5.0)),
     ((30, 25, 25.01), 10, ("Grande", 10.0)),

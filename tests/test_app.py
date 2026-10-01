@@ -29,7 +29,39 @@ def token(client):
 
 
 def register(client, name="Cliente Teste"):
-    return client.post("/cadastro", data={"name": name, "cpf": "12345678901", "phone": "16999999999", "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura", "terms_accept": "yes", "csrf_token": token(client)})
+    return client.post("/cadastro", data={"name": name, "cpf": "12345678901", "phone": "16999999999", "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura", "terms_accept": "yes", "residential_cep": "14400000", "residential_street": "Rua da Cliente", "residential_number": "123", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "residential_complement": "Apto 2", "csrf_token": token(client)})
+
+
+def test_registration_requires_and_saves_residential_address_separately(app, client):
+    response = client.post("/cadastro", data={"name": "Cliente Sem Endereco", "cpf": "12345678901",
+        "phone": "16999999999", "signature": signature(), "password": "senha-segura",
+        "password_confirm": "senha-segura", "terms_accept": "yes", "csrf_token": token(client)})
+    assert response.status_code == 400
+    assert "endereço residencial obrigatório" in response.text
+    response = register(client)
+    assert response.status_code == 200
+    connection = sqlite3.connect(app.config["DATABASE"])
+    address = connection.execute("SELECT residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement FROM clients").fetchone()
+    assert address == ("14400000", "Rua da Cliente", "123", "Centro", "Franca", "SP", "Apto 2")
+    assert b"RUA AFONSO BORGES DE FREITAS" in response.data
+
+
+def test_staff_edits_and_client_sees_both_addresses(app, client):
+    register(client)
+    login(client)
+    response = client.post("/painel/clientes/1/editar", data={"name": "Cliente Teste", "cpf": "12345678901",
+        "phone": "16999999999", "residential_cep": "14000001", "residential_street": "Rua Nova",
+        "residential_number": "45", "residential_district": "Bairro Novo", "residential_city": "Franca",
+        "residential_state": "sp", "residential_complement": "", "csrf_token": token(client)}, follow_redirects=True)
+    assert "Cadastro atualizado" in response.text
+    connection = sqlite3.connect(app.config["DATABASE"])
+    assert connection.execute("SELECT residential_street,residential_state FROM clients WHERE id=1").fetchone() == ("Rua Nova", "SP")
+    with client.session_transaction() as session:
+        session.clear(); session["client_id"] = 1; session["client_session_version"] = 1; session["csrf_token"] = "test-csrf"
+    page = client.get("/cliente").text
+    assert "Rua Nova" in page
+    assert "Endereço Pickup (retirada)" in page
+    assert "RUA AFONSO BORGES DE FREITAS" in page
 
 
 def login(client):
@@ -245,7 +277,7 @@ def test_package_error_preserves_form_and_edit_is_blocked_after_notice(app, clie
 def test_admin_edits_client_changes_password_and_deactivates_with_history(app, client):
     register(client)
     login(client)
-    response = client.post("/painel/clientes/1/editar", data={"name": "Nome Atualizado", "cpf": "123.456.789-01", "phone": "16988887777", "csrf_token": token(client)}, follow_redirects=True)
+    response = client.post("/painel/clientes/1/editar", data={"name": "Nome Atualizado", "cpf": "123.456.789-01", "phone": "16988887777", "residential_cep": "14400000", "residential_street": "Rua da Cliente", "residential_number": "123", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "csrf_token": token(client)}, follow_redirects=True)
     assert "Cadastro atualizado" in response.text
     client.post("/painel/clientes/1/senha", data={"password": "senha-nova", "password_confirm": "senha-nova", "csrf_token": token(client)})
     response = client.post("/painel/clientes/1/remover", data={"confirmation": "ADL-000001", "csrf_token": token(client)}, follow_redirects=True)
@@ -297,13 +329,14 @@ def test_client_cannot_access_another_receipt(app, client):
     register(client, "Primeiro Cliente")
     with client.session_transaction() as session:
         session.clear(); session["csrf_token"] = "test-csrf"
-    client.post("/cadastro", data={"name": "Segundo Cliente", "cpf": "98765432100", "phone": "16988888888", "signature": signature(), "password": "outra-senha", "password_confirm": "outra-senha", "terms_accept": "yes", "csrf_token": token(client)})
+    client.post("/cadastro", data={"name": "Segundo Cliente", "cpf": "98765432100", "phone": "16988888888", "signature": signature(), "password": "outra-senha", "password_confirm": "outra-senha", "terms_accept": "yes", "residential_cep": "14400000", "residential_street": "Rua Dois", "residential_number": "2", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "csrf_token": token(client)})
     connection = sqlite3.connect(app.config["DATABASE"])
     connection.execute("INSERT INTO pickups(id,receiver_name,receiver_document,signature,staff,picked_at,base_total,late_total,total_paid,payment_confirmed) VALUES(1,'X','1',?,'staff','2026-01-01T10:00:00-03:00',5,0,5,1)", (signature(),))
     connection.execute("INSERT INTO packages(id,public_id,client_id,width,height,length,weight,category,base_price,status,created_at) VALUES(1,'PCT-000001',2,10,10,10,1,'Pequeno',5,'retirado','2026-01-01T09:00:00-03:00')")
-    connection.execute("INSERT INTO pickup_packages VALUES(1,1,5,0)"); connection.commit()
+    connection.execute("INSERT INTO pickup_packages(pickup_id,package_id,base_amount,late_amount) VALUES(1,1,5,0)"); connection.commit()
     with client.session_transaction() as session:
         session["client_id"] = 1
+        session["client_session_version"] = 1
     assert client.get("/cliente/comprovantes/1").status_code == 404
 
 
