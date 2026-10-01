@@ -196,6 +196,31 @@ def test_normal_pickup_of_multiple_distinct_packages_is_atomic(app, client):
     assert connection.execute("SELECT COUNT(*) FROM packages WHERE status='retirado'").fetchone()[0] == 2
 
 
+def test_pickup_rolls_back_every_change_when_a_link_fails(app, client):
+    register(client)
+    login(client)
+    for shelf in ("A1", "A2"):
+        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "csrf_token": token(client)})
+    for package_id in (1, 2):
+        client.post(f"/pacotes/{package_id}/avisar", data={"csrf_token": token(client)})
+
+    connection = sqlite3.connect(app.config["DATABASE"])
+    connection.execute("""CREATE TRIGGER fail_second_pickup_link BEFORE INSERT ON pickup_packages
+        WHEN NEW.package_id=2 BEGIN SELECT RAISE(ABORT, 'falha simulada'); END""")
+    connection.commit()
+
+    response = client.post("/retiradas", data={
+        "package_ids": ["1", "2"], "receiver_name": "Cliente Teste",
+        "receiver_document": "CPF 123", "pickup_signature": signature(),
+        "csrf_token": token(client),
+    }, follow_redirects=True)
+    assert "Nenhuma alteração foi salva" in response.text
+    assert connection.execute("SELECT COUNT(*) FROM pickups").fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM pickup_packages").fetchone()[0] == 0
+    statuses = [row[0] for row in connection.execute("SELECT status FROM packages ORDER BY id")]
+    assert statuses == ["aguardando_retirada", "aguardando_retirada"]
+
+
 def test_csrf_is_required(client):
     assert client.post("/cadastro", data={}).status_code == 400
 
