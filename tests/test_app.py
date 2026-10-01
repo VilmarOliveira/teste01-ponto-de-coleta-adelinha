@@ -20,7 +20,6 @@ def client(app):
 
 def signature():
     return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-    return "data:image/png;base64,aGVsbG8="
 
 
 def token(client):
@@ -130,7 +129,96 @@ def test_partial_pickup_and_duplicate_protection(app, client):
     statuses = [row[0] for row in connection.execute("SELECT status FROM packages ORDER BY id")]
     assert statuses == ["retirado", "aguardando_retirada"]
     response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Maria", "receiver_document": "RG 1", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
-    assert "Retirada bloqueada" in response.text
+    assert "já possui uma retirada registrada" in response.text
+
+
+def test_duplicate_package_ids_are_processed_once(app, client):
+    register(client)
+    login(client)
+    client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": "A1", "csrf_token": token(client)})
+    client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
+
+    response = client.post("/retiradas", data={
+        "package_ids": ["1", "1"], "receiver_name": "Cliente Teste",
+        "receiver_document": "CPF 123", "pickup_signature": signature(),
+        "csrf_token": token(client),
+    })
+    assert response.status_code == 302
+    connection = sqlite3.connect(app.config["DATABASE"])
+    assert connection.execute("SELECT COUNT(*) FROM pickups").fetchone()[0] == 1
+    assert connection.execute("SELECT COUNT(*) FROM pickup_packages").fetchone()[0] == 1
+    assert connection.execute("SELECT status FROM packages WHERE id=1").fetchone()[0] == "retirado"
+
+
+def test_dashboard_renders_one_package_section_and_one_package_card(client):
+    register(client)
+    login(client)
+    client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": "A1", "csrf_token": token(client)})
+    response = client.get("/painel")
+    assert response.text.count("<h2>Pacotes</h2>") == 1
+    # O ID aparece no cartão e no link/URL, mas existe somente um article do pacote.
+    assert response.text.count('<article class="package">') == 1
+
+
+def test_second_pickup_shows_existing_receipt_without_new_rows(app, client):
+    register(client)
+    login(client)
+    client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": "A1", "csrf_token": token(client)})
+    client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
+    payload = {"package_ids": "1", "receiver_name": "Cliente Teste", "receiver_document": "CPF 123", "pickup_signature": signature(), "csrf_token": token(client)}
+    client.post("/retiradas", data=payload)
+
+    response = client.post("/retiradas", data=payload, follow_redirects=True)
+    assert "já possui uma retirada registrada" in response.text
+    assert "Baixar comprovante em PDF" in response.text
+    connection = sqlite3.connect(app.config["DATABASE"])
+    assert connection.execute("SELECT COUNT(*) FROM pickups").fetchone()[0] == 1
+    assert connection.execute("SELECT COUNT(*) FROM pickup_packages").fetchone()[0] == 1
+
+
+def test_normal_pickup_of_multiple_distinct_packages_is_atomic(app, client):
+    register(client)
+    login(client)
+    for shelf in ("A1", "A2"):
+        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "csrf_token": token(client)})
+    for package_id in (1, 2):
+        client.post(f"/pacotes/{package_id}/avisar", data={"csrf_token": token(client)})
+
+    response = client.post("/retiradas", data={
+        "package_ids": ["1", "2"], "receiver_name": "Terceiro",
+        "receiver_document": "RG 999", "pickup_signature": signature(),
+        "csrf_token": token(client),
+    })
+    assert response.status_code == 302
+    connection = sqlite3.connect(app.config["DATABASE"])
+    assert connection.execute("SELECT COUNT(*) FROM pickups").fetchone()[0] == 1
+    assert connection.execute("SELECT COUNT(*) FROM pickup_packages").fetchone()[0] == 2
+    assert connection.execute("SELECT COUNT(*) FROM packages WHERE status='retirado'").fetchone()[0] == 2
+
+
+def test_pickup_rolls_back_every_change_when_a_link_fails(app, client):
+    register(client)
+    login(client)
+    for shelf in ("A1", "A2"):
+        client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "csrf_token": token(client)})
+    for package_id in (1, 2):
+        client.post(f"/pacotes/{package_id}/avisar", data={"csrf_token": token(client)})
+
+    connection = sqlite3.connect(app.config["DATABASE"])
+    connection.execute("""CREATE TRIGGER fail_second_pickup_link BEFORE INSERT ON pickup_packages
+        WHEN NEW.package_id=2 BEGIN SELECT RAISE(ABORT, 'falha simulada'); END""")
+    connection.commit()
+
+    response = client.post("/retiradas", data={
+        "package_ids": ["1", "2"], "receiver_name": "Cliente Teste",
+        "receiver_document": "CPF 123", "pickup_signature": signature(),
+        "csrf_token": token(client),
+    }, follow_redirects=True)
+    assert "Nenhuma alteração foi salva" in response.text
+    assert connection.execute("SELECT COUNT(*) FROM pickups").fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM pickup_packages").fetchone()[0] == 0
+    statuses = [row[0] for row in connection.execute("SELECT status FROM packages ORDER BY id")]
+    assert statuses == ["aguardando_retirada", "aguardando_retirada"]
 
 
 def test_csrf_is_required(client):

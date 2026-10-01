@@ -234,7 +234,6 @@ def create_app(test_config=None):
         if not pickup:
             abort(404)
         packages = db().execute("SELECT p.id package_id,p.public_id,pp.base_amount,pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=? AND p.client_id=?", (pickup_id, session["client_id"])).fetchall()
-        packages = db().execute("SELECT p.public_id,pp.base_amount,pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=? AND p.client_id=?", (pickup_id, session["client_id"])).fetchall()
         return render_template("receipt.html", pickup=pickup, packages=packages, pix=PIX_KEY, client_copy=True)
 
     @app.post("/sair")
@@ -247,12 +246,15 @@ def create_app(test_config=None):
     def dashboard():
         query = request.args.get("q", "").strip()
         clients = find_clients(query)
-        packages = db().execute("""
+        package_rows = db().execute("""
             SELECT p.*, c.name client_name, c.public_id client_public_id, c.phone
             FROM packages p JOIN clients c ON c.id=p.client_id
             ORDER BY CASE p.status WHEN 'aguardando_aviso' THEN 0 WHEN 'aguardando_retirada' THEN 1 ELSE 2 END, p.created_at DESC
         """).fetchall()
-        rows = [{**dict(p), **fees(p)} for p in packages]
+        # Uma única coleção alimenta a única seção "Pacotes" da tela. A chave
+        # também protege a interface caso uma futura consulta ganhe outro JOIN.
+        packages = {package["id"]: package for package in package_rows}.values()
+        rows = [{**dict(package), **fees(package)} for package in packages]
         return render_template("dashboard.html", clients=clients, packages=rows, q=query, pix=PIX_KEY)
 
     @app.get("/painel/clientes/busca")
@@ -362,14 +364,16 @@ def create_app(test_config=None):
     @app.post("/retiradas")
     @login_required
     def pickup():
-        ids = [int(x) for x in request.form.getlist("package_ids")]
+        raw_ids = request.form.getlist("package_ids")
+        try:
+            # O navegador pode enviar o mesmo checkbox mais de uma vez. Remova
+            # repetições mantendo a ordem antes de calcular ou persistir valores.
+            ids = list(dict.fromkeys(int(value) for value in raw_ids))
+        except ValueError:
+            flash("A seleção contém um pacote inválido.", "error")
+            return redirect(url_for("dashboard"))
         if not ids:
             flash("Selecione ao menos um pacote.", "error")
-            return redirect(url_for("dashboard"))
-        placeholders = ",".join("?" * len(ids))
-        packages = db().execute(f"SELECT * FROM packages WHERE id IN ({placeholders}) AND status='aguardando_retirada'", ids).fetchall()
-        if len(packages) != len(set(ids)):
-            flash("Retirada bloqueada: pacote inválido ou já retirado.", "error")
             return redirect(url_for("dashboard"))
         receiver = request.form.get("receiver_name", "").strip()
         document = request.form.get("receiver_document", "").strip()
@@ -377,24 +381,57 @@ def create_app(test_config=None):
         if not receiver or not document or not signature.startswith("data:image/png;base64,"):
             flash("Informe quem retirou, documento e assinatura.", "error")
             return redirect(url_for("dashboard"))
-        totals = [fees(p) for p in packages]
-        picked_at = now().isoformat()
-        cur = db().execute("INSERT INTO pickups(receiver_name, receiver_document, signature, staff, picked_at, base_total, late_total, total_paid, payment_method, payment_confirmed) VALUES(?,?,?,?,?,?,?,?,?,1)",
-            (receiver, document, signature, session["staff"], picked_at, sum(x["base"] for x in totals), sum(x["late_fee"] for x in totals), sum(x["total"] for x in totals), "Pix"))
-        pickup_id = cur.lastrowid
-        for package, total in zip(packages, totals):
-            owner = db().execute("SELECT id,name,public_id FROM clients WHERE id=?", (package["client_id"],)).fetchone()
-            db().execute("""INSERT INTO pickup_packages(
-                pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,
-                service_amount,late_days,total_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
-                (pickup_id, package["id"], total["base"], total["late_fee"], package["public_id"], owner["id"], owner["name"], owner["public_id"], total["base"], total["late_days"], total["total"]))
-        cur = db().execute("INSERT INTO pickups(receiver_name, receiver_document, signature, staff, picked_at, base_total, late_total, total_paid, payment_confirmed) VALUES(?,?,?,?,?,?,?,?,1)",
-            (receiver, document, signature, session["staff"], picked_at, sum(x["base"] for x in totals), sum(x["late_fee"] for x in totals), sum(x["total"] for x in totals)))
-        pickup_id = cur.lastrowid
-        for package, total in zip(packages, totals):
-            db().execute("INSERT INTO pickup_packages(pickup_id, package_id, base_amount, late_amount) VALUES(?,?,?,?)", (pickup_id, package["id"], total["base"], total["late_fee"]))
-            db().execute("UPDATE packages SET status='retirado', picked_at=? WHERE id=?", (picked_at, package["id"]))
-        db().commit()
+        placeholders = ",".join("?" * len(ids))
+        connection = db()
+        try:
+            # Serializa a conferência e a gravação para que duas confirmações
+            # simultâneas não consigam retirar o mesmo pacote.
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                f"SELECT pp.package_id,pp.pickup_id FROM pickup_packages pp WHERE pp.package_id IN ({placeholders}) LIMIT 1",
+                ids,
+            ).fetchone()
+            if existing:
+                connection.rollback()
+                flash("Este pacote já possui uma retirada registrada. Consulte o comprovante existente abaixo.", "error")
+                return redirect(url_for("package_detail", package_id=existing["package_id"]))
+
+            packages = connection.execute(
+                f"SELECT * FROM packages WHERE id IN ({placeholders}) AND status='aguardando_retirada' ORDER BY id",
+                ids,
+            ).fetchall()
+            if len(packages) != len(ids):
+                connection.rollback()
+                flash("Retirada bloqueada: há pacote inválido ou que não está aguardando retirada.", "error")
+                return redirect(url_for("dashboard"))
+
+            totals = [fees(package) for package in packages]
+            picked_at = now().isoformat()
+            cur = connection.execute("INSERT INTO pickups(receiver_name, receiver_document, signature, staff, picked_at, base_total, late_total, total_paid, payment_method, payment_confirmed) VALUES(?,?,?,?,?,?,?,?,?,1)",
+                (receiver, document, signature, session["staff"], picked_at, sum(x["base"] for x in totals), sum(x["late_fee"] for x in totals), sum(x["total"] for x in totals), "Pix"))
+            pickup_id = cur.lastrowid
+            for package, total in zip(packages, totals):
+                owner = connection.execute("SELECT id,name,public_id FROM clients WHERE id=?", (package["client_id"],)).fetchone()
+                connection.execute("""INSERT INTO pickup_packages(
+                    pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,
+                    service_amount,late_days,total_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                    (pickup_id, package["id"], total["base"], total["late_fee"], package["public_id"], owner["id"], owner["name"], owner["public_id"], total["base"], total["late_days"], total["total"]))
+                connection.execute("UPDATE packages SET status='retirado', picked_at=? WHERE id=?", (picked_at, package["id"]))
+            connection.commit()
+        except sqlite3.IntegrityError:
+            connection.rollback()
+            existing = connection.execute(
+                f"SELECT package_id,pickup_id FROM pickup_packages WHERE package_id IN ({placeholders}) LIMIT 1",
+                ids,
+            ).fetchone()
+            if existing:
+                flash("Este pacote já possui uma retirada registrada. Consulte o comprovante existente abaixo.", "error")
+                return redirect(url_for("package_detail", package_id=existing["package_id"]))
+            flash("Não foi possível concluir a retirada. Nenhuma alteração foi salva.", "error")
+            return redirect(url_for("dashboard"))
+        except Exception:
+            connection.rollback()
+            raise
         return redirect(url_for("receipt", pickup_id=pickup_id))
 
     @app.get("/comprovantes/<int:pickup_id>")
@@ -420,9 +457,6 @@ def create_app(test_config=None):
         filename = f"comprovante-{row['package_public_id'] or package_id}.pdf"
         return send_file(pdf, mimetype="application/pdf", as_attachment=True, download_name=filename)
 
-        packages = db().execute("SELECT p.public_id, pp.base_amount, pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=?", (pickup_id,)).fetchall()
-        return render_template("receipt.html", pickup=pickup, packages=packages, pix=PIX_KEY)
-
     with app.app_context():
         init_db(app.config["DATABASE"])
     return app
@@ -444,8 +478,6 @@ def init_db(path):
     CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, client_id INTEGER NOT NULL REFERENCES clients(id), tracking TEXT, width REAL NOT NULL, height REAL NOT NULL, length REAL NOT NULL, weight REAL NOT NULL, shelf TEXT, category TEXT NOT NULL, base_price REAL NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, notified_at TEXT, picked_at TEXT);
     CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_method TEXT, payment_confirmed INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id INTEGER REFERENCES pickups(id), package_id INTEGER UNIQUE REFERENCES packages(id), base_amount REAL NOT NULL, late_amount REAL NOT NULL, package_public_id TEXT, client_id INTEGER, client_name TEXT, client_public_id TEXT, service_amount REAL, late_days INTEGER, total_amount REAL, PRIMARY KEY(pickup_id, package_id));
-    CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_confirmed INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id INTEGER REFERENCES pickups(id), package_id INTEGER UNIQUE REFERENCES packages(id), base_amount REAL NOT NULL, late_amount REAL NOT NULL, PRIMARY KEY(pickup_id, package_id));
     CREATE TABLE IF NOT EXISTS password_tokens (id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL REFERENCES clients(id), token_hash TEXT UNIQUE NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, used_at TEXT);
     CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, identifier TEXT NOT NULL, succeeded INTEGER NOT NULL, attempted_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_login_attempts ON login_attempts(kind,identifier,attempted_at);
