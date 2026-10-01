@@ -116,6 +116,8 @@ Antes da produção: revise a minuta com profissional jurídico/LGPD, troque as 
 
 Nunca substitua nem apague `adelinha.db` durante uma atualização. Faça também uma cópia antes de cada deploy ou mudança de versão.
 
+Nesta atualização, a inicialização também acrescenta os campos de histórico do comprovante. Novas retiradas passam a guardar uma fotografia dos IDs, nome do cliente, valores, atraso e pagamento. Retiradas antigas são preservadas; campos que nunca foram gravados aparecem como **“Não registrado”**. A geração do PDF usa `reportlab`, instalado automaticamente pelo `requirements.txt`.
+
 ## Regras implementadas
 
 - ID de cliente `ADL-000001` e pacote `PCT-000001` sequenciais.

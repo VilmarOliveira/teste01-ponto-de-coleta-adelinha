@@ -2,10 +2,16 @@ import os
 import secrets
 import sqlite3
 import hashlib
+import base64
+from io import BytesIO
 from datetime import datetime, timedelta
 from functools import wraps
 from pathlib import Path
 
+from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -227,6 +233,7 @@ def create_app(test_config=None):
         pickup = db().execute("SELECT pu.* FROM pickups pu WHERE pu.id=? AND EXISTS(SELECT 1 FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=pu.id AND p.client_id=?)", (pickup_id, session["client_id"])).fetchone()
         if not pickup:
             abort(404)
+        packages = db().execute("SELECT p.id package_id,p.public_id,pp.base_amount,pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=? AND p.client_id=?", (pickup_id, session["client_id"])).fetchall()
         packages = db().execute("SELECT p.public_id,pp.base_amount,pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=? AND p.client_id=?", (pickup_id, session["client_id"])).fetchall()
         return render_template("receipt.html", pickup=pickup, packages=packages, pix=PIX_KEY, client_copy=True)
 
@@ -263,6 +270,18 @@ def create_app(test_config=None):
         packages = db().execute("SELECT * FROM packages WHERE client_id=? ORDER BY created_at DESC", (client_id,)).fetchall()
         receipts = db().execute("SELECT DISTINCT pu.* FROM pickups pu JOIN pickup_packages pp ON pp.pickup_id=pu.id JOIN packages p ON p.id=pp.package_id WHERE p.client_id=? ORDER BY pu.picked_at DESC", (client_id,)).fetchall()
         return render_template("staff_client.html", client=client, packages=packages, receipts=receipts)
+
+    @app.get("/painel/pacotes/<int:package_id>")
+    @login_required
+    def package_detail(package_id):
+        package = db().execute("""SELECT p.*,c.name client_name,c.public_id client_public_id,c.id owner_id
+            FROM packages p JOIN clients c ON c.id=p.client_id WHERE p.id=?""", (package_id,)).fetchone()
+        if not package:
+            abort(404)
+        withdrawal = db().execute("""SELECT pu.*,pp.package_public_id,pp.client_id snapshot_client_id,
+            pp.client_name snapshot_client_name,pp.client_public_id snapshot_client_public_id,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount
+            FROM pickup_packages pp JOIN pickups pu ON pu.id=pp.pickup_id WHERE pp.package_id=?""", (package_id,)).fetchone()
+        return render_template("package_detail.html", package=package, withdrawal=withdrawal)
 
     @app.post("/painel/clientes/<int:client_id>/link-senha")
     @login_required
@@ -360,6 +379,15 @@ def create_app(test_config=None):
             return redirect(url_for("dashboard"))
         totals = [fees(p) for p in packages]
         picked_at = now().isoformat()
+        cur = db().execute("INSERT INTO pickups(receiver_name, receiver_document, signature, staff, picked_at, base_total, late_total, total_paid, payment_method, payment_confirmed) VALUES(?,?,?,?,?,?,?,?,?,1)",
+            (receiver, document, signature, session["staff"], picked_at, sum(x["base"] for x in totals), sum(x["late_fee"] for x in totals), sum(x["total"] for x in totals), "Pix"))
+        pickup_id = cur.lastrowid
+        for package, total in zip(packages, totals):
+            owner = db().execute("SELECT id,name,public_id FROM clients WHERE id=?", (package["client_id"],)).fetchone()
+            db().execute("""INSERT INTO pickup_packages(
+                pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,
+                service_amount,late_days,total_amount) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                (pickup_id, package["id"], total["base"], total["late_fee"], package["public_id"], owner["id"], owner["name"], owner["public_id"], total["base"], total["late_days"], total["total"]))
         cur = db().execute("INSERT INTO pickups(receiver_name, receiver_document, signature, staff, picked_at, base_total, late_total, total_paid, payment_confirmed) VALUES(?,?,?,?,?,?,?,?,1)",
             (receiver, document, signature, session["staff"], picked_at, sum(x["base"] for x in totals), sum(x["late_fee"] for x in totals), sum(x["total"] for x in totals)))
         pickup_id = cur.lastrowid
@@ -375,6 +403,23 @@ def create_app(test_config=None):
         pickup = db().execute("SELECT * FROM pickups WHERE id=?", (pickup_id,)).fetchone()
         if not pickup:
             abort(404)
+        packages = db().execute("SELECT p.id package_id,p.public_id, pp.base_amount, pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=?", (pickup_id,)).fetchall()
+        return render_template("receipt.html", pickup=pickup, packages=packages, pix=PIX_KEY)
+
+    @app.get("/comprovantes/<int:pickup_id>/pacotes/<int:package_id>.pdf")
+    def receipt_pdf(pickup_id, package_id):
+        row = db().execute("""SELECT pu.*,pp.package_public_id,pp.client_id snapshot_client_id,p.client_id owner_id,
+            pp.client_name snapshot_client_name,pp.client_public_id snapshot_client_public_id,pp.service_amount,pp.late_days,pp.late_amount,pp.total_amount
+            FROM pickup_packages pp JOIN pickups pu ON pu.id=pp.pickup_id JOIN packages p ON p.id=pp.package_id
+            WHERE pp.pickup_id=? AND pp.package_id=?""", (pickup_id, package_id)).fetchone()
+        if not row:
+            abort(404)
+        if not session.get("staff") and session.get("client_id") not in (row["snapshot_client_id"], row["owner_id"]):
+            abort(403)
+        pdf = build_receipt_pdf(row)
+        filename = f"comprovante-{row['package_public_id'] or package_id}.pdf"
+        return send_file(pdf, mimetype="application/pdf", as_attachment=True, download_name=filename)
+
         packages = db().execute("SELECT p.public_id, pp.base_amount, pp.late_amount FROM pickup_packages pp JOIN packages p ON p.id=pp.package_id WHERE pp.pickup_id=?", (pickup_id,)).fetchall()
         return render_template("receipt.html", pickup=pickup, packages=packages, pix=PIX_KEY)
 
@@ -397,6 +442,8 @@ def init_db(path):
     connection.executescript("""
     CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, name TEXT NOT NULL, cpf TEXT NOT NULL, phone TEXT NOT NULL, terms_version TEXT NOT NULL, terms_text TEXT, signature TEXT NOT NULL, accepted_at TEXT NOT NULL, password_hash TEXT);
     CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, client_id INTEGER NOT NULL REFERENCES clients(id), tracking TEXT, width REAL NOT NULL, height REAL NOT NULL, length REAL NOT NULL, weight REAL NOT NULL, shelf TEXT, category TEXT NOT NULL, base_price REAL NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, notified_at TEXT, picked_at TEXT);
+    CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_method TEXT, payment_confirmed INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id INTEGER REFERENCES pickups(id), package_id INTEGER UNIQUE REFERENCES packages(id), base_amount REAL NOT NULL, late_amount REAL NOT NULL, package_public_id TEXT, client_id INTEGER, client_name TEXT, client_public_id TEXT, service_amount REAL, late_days INTEGER, total_amount REAL, PRIMARY KEY(pickup_id, package_id));
     CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_confirmed INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id INTEGER REFERENCES pickups(id), package_id INTEGER UNIQUE REFERENCES packages(id), base_amount REAL NOT NULL, late_amount REAL NOT NULL, PRIMARY KEY(pickup_id, package_id));
     CREATE TABLE IF NOT EXISTS password_tokens (id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL REFERENCES clients(id), token_hash TEXT UNIQUE NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, used_at TEXT);
@@ -408,8 +455,75 @@ def init_db(path):
         connection.execute("ALTER TABLE clients ADD COLUMN password_hash TEXT")
     if "terms_text" not in columns:
         connection.execute("ALTER TABLE clients ADD COLUMN terms_text TEXT")
+    ensure_columns(connection, "pickups", {"payment_method": "TEXT"})
+    ensure_columns(connection, "pickup_packages", {
+        "package_public_id": "TEXT", "client_id": "INTEGER", "client_name": "TEXT", "client_public_id": "TEXT",
+        "service_amount": "REAL", "late_days": "INTEGER", "total_amount": "REAL",
+    })
     connection.commit()
     connection.close()
+
+
+def ensure_columns(connection, table, definitions):
+    existing = {row[1] for row in connection.execute(f"PRAGMA table_info({table})")}
+    for name, data_type in definitions.items():
+        if name not in existing:
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {data_type}")
+
+
+def display(value, money=False):
+    if value is None or value == "":
+        return "Não registrado"
+    return f"R$ {float(value):.2f}".replace(".", ",") if money else str(value)
+
+
+def build_receipt_pdf(withdrawal):
+    """Cria uma cópia imutável usando exclusivamente os valores salvos na retirada."""
+    output = BytesIO()
+    pdf = canvas.Canvas(output, pagesize=A4, pageCompression=0)
+    width, height = A4
+    pdf.setTitle(f"Comprovante {display(withdrawal['package_public_id'])}")
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawString(45, height - 50, "PONTO DE COLETA ADELINHA")
+    pdf.setFont("Helvetica", 9)
+    lines = [
+        "CNPJ: 38.145.273/0001-05",
+        ADDRESS,
+        "WhatsApp: (16) 98800-4966",
+        "",
+        f"Pacote: {display(withdrawal['package_public_id'])}",
+        f"Cliente: {display(withdrawal['snapshot_client_name'])}",
+        f"ID do cliente: {display(withdrawal['snapshot_client_public_id'])}",
+        f"Retirado por: {display(withdrawal['receiver_name'])}",
+        f"Documento: {display(withdrawal['receiver_document'])}",
+        f"Data e hora: {display(withdrawal['picked_at'])} (America/Sao_Paulo)",
+        f"Valor do serviço: {display(withdrawal['service_amount'], True)}",
+        f"Dias de atraso: {display(withdrawal['late_days'])}",
+        f"Taxa extra: {display(withdrawal['late_amount'], True)}",
+        f"Total pago: {display(withdrawal['total_amount'], True)}",
+        f"Forma de pagamento: {display(withdrawal['payment_method'])}",
+        f"Pagamento confirmado pelo atendente: {'Sim' if withdrawal['payment_confirmed'] == 1 else 'Não registrado'}",
+        f"Atendente: {display(withdrawal['staff'])}",
+    ]
+    y = height - 72
+    for line in lines:
+        pdf.drawString(45, y, line)
+        y -= 16
+    statement = "Confirmo que retirei o pacote identificado neste comprovante e que o pagamento informado foi realizado."
+    pdf.setFont("Helvetica-Bold", 9)
+    pdf.drawString(45, y - 10, statement)
+    y -= 55
+    pdf.setFont("Helvetica", 9)
+    pdf.drawString(45, y, "Assinatura de quem retirou:")
+    signature = withdrawal["signature"]
+    if signature and signature.startswith("data:image/png;base64,"):
+        image_data = base64.b64decode(signature.split(",", 1)[1])
+        pdf.drawImage(ImageReader(BytesIO(image_data)), 45, y - 100, width=260, height=90, preserveAspectRatio=True, anchor="sw")
+    else:
+        pdf.drawString(45, y - 20, "Não registrado")
+    pdf.save()
+    output.seek(0)
+    return output
 
 
 if __name__ == "__main__":

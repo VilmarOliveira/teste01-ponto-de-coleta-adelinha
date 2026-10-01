@@ -19,6 +19,7 @@ def client(app):
 
 
 def signature():
+    return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
     return "data:image/png;base64,aGVsbG8="
 
 
@@ -201,3 +202,66 @@ def test_expired_password_link_is_rejected(app, client):
     connection.execute("UPDATE password_tokens SET expires_at='2020-01-01T00:00:00-03:00'")
     connection.commit()
     assert client.get("/definir-senha/" + raw).status_code == 410
+
+
+@pytest.mark.parametrize("receiver,document", [
+    ("Cliente Teste", "CPF 12345678901"),
+    ("Terceiro Autorizado", "RG 998877"),
+])
+def test_withdrawal_snapshot_detail_restart_and_pdf(app, client, receiver, document):
+    register(client)
+    login(client)
+    client.post("/pacotes", data={
+        "client_id": 1, "width": 10, "height": 10, "length": 10,
+        "weight": 1, "shelf": "A1", "csrf_token": token(client),
+    })
+    client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
+    response = client.post("/retiradas", data={
+        "package_ids": "1", "receiver_name": receiver,
+        "receiver_document": document, "pickup_signature": signature(),
+        "csrf_token": token(client),
+    })
+    assert response.status_code == 302
+
+    connection = sqlite3.connect(app.config["DATABASE"])
+    snapshot = connection.execute("""SELECT package_public_id,client_id,client_name,client_public_id,service_amount,
+        late_days,late_amount,total_amount FROM pickup_packages""").fetchone()
+    assert snapshot == ("PCT-000001", 1, "Cliente Teste", "ADL-000001", 5, 0, 0, 5)
+    connection.execute("UPDATE clients SET name='Nome alterado' WHERE id=1")
+    connection.execute("UPDATE packages SET base_price=99 WHERE id=1")
+    connection.commit()
+
+    restarted = create_app({"TESTING": True, "SECRET_KEY": "restart", "DATABASE": app.config["DATABASE"]})
+    restarted_client = restarted.test_client()
+    with restarted_client.session_transaction() as session:
+        session["staff"] = "staff"
+    detail = restarted_client.get("/painel/pacotes/1")
+    assert detail.status_code == 200
+    assert b"Cliente Teste" in detail.data
+    assert receiver.encode() in detail.data
+    assert document.encode() in detail.data
+    assert b"R$ 5,00" in detail.data
+
+    pdf = restarted_client.get("/comprovantes/1/pacotes/1.pdf")
+    assert pdf.status_code == 200
+    assert pdf.mimetype == "application/pdf"
+    assert pdf.data.startswith(b"%PDF-")
+    assert b"PCT-000001" in pdf.data
+    assert b"Cliente Teste" in pdf.data
+    assert receiver.encode() in pdf.data
+    assert b"Confirmo que retirei o pacote" in pdf.data
+    assert b"/Subtype /Image" in pdf.data
+
+
+def test_client_cannot_download_another_clients_pdf(app, client):
+    # Reaproveita uma retirada mínima gravada diretamente para verificar autorização.
+    register(client)
+    connection = sqlite3.connect(app.config["DATABASE"])
+    connection.execute("INSERT INTO clients(id,public_id,name,cpf,phone,terms_version,signature,accepted_at) VALUES(2,'ADL-000002','Outro','99999999999','16999999999','v',?,'2026-01-01')", (signature(),))
+    connection.execute("INSERT INTO packages(id,public_id,client_id,width,height,length,weight,category,base_price,status,created_at) VALUES(1,'PCT-000001',2,10,10,10,1,'Pequeno',5,'retirado','2026-01-01')")
+    connection.execute("INSERT INTO pickups(id,receiver_name,receiver_document,signature,staff,picked_at,base_total,late_total,total_paid,payment_method,payment_confirmed) VALUES(1,'Outro','RG',?,'admin','2026-01-01',5,0,5,'Pix',1)", (signature(),))
+    connection.execute("INSERT INTO pickup_packages(pickup_id,package_id,base_amount,late_amount,package_public_id,client_id,client_name,client_public_id,service_amount,late_days,total_amount) VALUES(1,1,5,0,'PCT-000001',2,'Outro','ADL-000002',5,0,5)")
+    connection.commit()
+    with client.session_transaction() as session:
+        session["client_id"] = 1
+    assert client.get("/comprovantes/1/pacotes/1.pdf").status_code == 403
