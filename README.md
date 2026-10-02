@@ -2,8 +2,6 @@
 
 Sistema web responsivo para cadastro público, gestão interna de pacotes, aviso manual por WhatsApp, cálculo de prazo e retirada com comprovante. Os dados ficam em SQLite no servidor, não no navegador.
 
-> **Atenção:** esta versão usa dados e credenciais de demonstração. A minuta deve ser revisada e a segurança operacional validada antes de atender clientes reais.
-
 ## 1. Executar localmente (passo a passo)
 
 Requer Python 3.11 ou superior.
