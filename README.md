@@ -2,16 +2,6 @@
 
 Sistema web responsivo para cadastro público, gestão interna de pacotes, aviso manual por WhatsApp, cálculo de prazo e retirada com comprovante. Os dados ficam em SQLite no servidor, não no navegador.
 
-## Link da prévia
-
-**[Abrir a versão de teste do Ponto de Coleta Adelinha](https://ponto-coleta-adelinha-teste.onrender.com)**
-
-O endereço acima corresponde ao serviço `ponto-coleta-adelinha-teste` configurado em `render.yaml`. A versão nova aparecerá nesse mesmo link depois que esta branch for enviada ao GitHub, mesclada na branch acompanhada pelo Render e o deploy terminar com sucesso. O link não muda a cada atualização.
-
-Para confirmar que a atualização entrou no ar, abra também o [health check da prévia](https://ponto-coleta-adelinha-teste.onrender.com/health). Ele deve mostrar `{"status":"ok"}`. Se o Render estiver configurado para exigir autenticação de acesso à prévia, entre primeiro com a conta autorizada no painel do Render.
-
-> **Atenção:** esta versão usa dados e credenciais de demonstração. A minuta deve ser revisada e a segurança operacional validada antes de atender clientes reais.
-
 ## 1. Executar localmente (passo a passo)
 
 Requer Python 3.11 ou superior.
