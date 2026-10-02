@@ -2,6 +2,16 @@
 
 Sistema web responsivo para cadastro público, gestão interna de pacotes, aviso manual por WhatsApp, cálculo de prazo e retirada com comprovante. Os dados ficam em SQLite no servidor, não no navegador.
 
+## Link da prévia
+
+**[Abrir a versão de teste do Ponto de Coleta Adelinha](https://ponto-coleta-adelinha-teste.onrender.com)**
+
+O endereço acima corresponde ao serviço `ponto-coleta-adelinha-teste` configurado em `render.yaml`. A versão nova aparecerá nesse mesmo link depois que esta branch for enviada ao GitHub, mesclada na branch acompanhada pelo Render e o deploy terminar com sucesso. O link não muda a cada atualização.
+
+Para confirmar que a atualização entrou no ar, abra também o [health check da prévia](https://ponto-coleta-adelinha-teste.onrender.com/health). Ele deve mostrar `{"status":"ok"}`. Se o Render estiver configurado para exigir autenticação de acesso à prévia, entre primeiro com a conta autorizada no painel do Render.
+
+> **Atenção:** esta versão usa dados e credenciais de demonstração. A minuta deve ser revisada e a segurança operacional validada antes de atender clientes reais.
+
 ## 1. Executar localmente (passo a passo)
 
 Requer Python 3.11 ou superior.
@@ -9,7 +19,7 @@ Requer Python 3.11 ou superior.
 1. Instale o **Python 3.11 ou mais recente** pelo site oficial do Python. No Windows, marque “Add Python to PATH”.
 2. Baixe este projeto e abra um Terminal dentro da pasta dele.
 3. No Linux/macOS, execute `chmod +x scripts/setup.sh && ./scripts/setup.sh`. O script cria um ambiente isolado, instala tudo e roda os testes.
-4. Inicie com `.venv/bin/python app.py`. No Windows, use `.venv\Scripts\python app.py`.
+4. Inicie com `.venv/bin/python app.py`. No Windows, dê dois cliques em `iniciar.bat`; ele cria e utiliza o ambiente `.venv-local` automaticamente.
 5. Abra `http://localhost:5000` no navegador. Para encerrar, volte ao Terminal e pressione `Ctrl+C`.
 
 Para incluir o exemplo fictício antes de iniciar:
@@ -107,8 +117,15 @@ Antes da produção: revise a minuta com profissional jurídico/LGPD, troque as 
 2. Copie esse arquivo para uma pasta segura, com data no nome, por exemplo `Backup\adelinha-2026-09-30.db`. Não continue sem esse backup.
 3. Abra PowerShell na pasta do projeto e execute `git status`. Se houver alterações suas, salve-as com `git add .` e `git commit -m "backup antes da atualização"`.
 4. Execute `git pull origin work` para baixar a nova versão.
-5. Ative o ambiente com `.venv\Scripts\Activate.ps1` e execute `python -m pip install -r requirements.txt`. O pacote `tzdata` agora está incluído para o fuso funcionar no Windows.
-6. Execute `python -m pytest -q`. Depois inicie com `python app.py`.
+5. Execute `iniciar.bat` com dois cliques. Ele cria `.venv-local`, instala `requirements.txt` (incluindo `tzdata`) e abre o sistema em `http://localhost:5000`.
+6. Para executar manualmente pelo CMD, use exatamente:
+   ```bat
+   cd C:\caminho\da\pasta\do\projeto
+   py -3 -m venv .venv-local
+   .venv-local\Scripts\python.exe -m pip install -r requirements.txt
+   .venv-local\Scripts\python.exe -m pytest -q
+   .venv-local\Scripts\python.exe app.py
+   ```
 7. Na primeira inicialização, a migração adiciona as novas colunas e tabelas sem recriar clientes, IDs, assinaturas, pacotes ou retiradas. Clientes antigos continuam sem senha até a equipe conferir a identidade e gerar o link temporário no cadastro completo.
 8. Confira alguns registros. Se houver problema, pare o sistema e restaure a cópia do banco feita no passo 2.
 
@@ -122,7 +139,7 @@ O titular é **AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS** e a chave CNPJ 
 
 ### Migração dos endereços
 
-A primeira inicialização acrescenta campos separados para o endereço residencial sem apagar registros. Cadastros antigos ficam identificados como **Não cadastrado** até a agência preenchê-los na edição do cliente. Novos cadastros exigem CEP, rua, número, bairro, cidade e estado. O endereço Pickup permanece separado e não é copiado para o endereço residencial.
+A primeira inicialização acrescenta campos separados para o endereço residencial e o e-mail sem apagar registros. Cadastros antigos ficam identificados como **Não cadastrado** até o cliente ou o atendente preencher os dados. Novos cadastros exigem CEP, rua, número, bairro, cidade e estado. A busca via ViaCEP auxilia o preenchimento, mas os campos continuam disponíveis para correção manual. O endereço Pickup permanece separado, não é copiado para o residencial e não pode ser alterado pelo cliente.
 
 ### O que a migração preserva
 

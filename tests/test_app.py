@@ -29,7 +29,7 @@ def token(client):
 
 
 def register(client, name="Cliente Teste"):
-    return client.post("/cadastro", data={"name": name, "cpf": "12345678901", "phone": "16999999999", "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura", "terms_accept": "yes", "residential_cep": "14400000", "residential_street": "Rua da Cliente", "residential_number": "123", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "residential_complement": "Apto 2", "csrf_token": token(client)})
+    return client.post("/cadastro", data={"name": name, "cpf": "12345678901", "phone": "16999999999", "email": "cliente@example.com", "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura", "terms_accept": "yes", "residential_cep": "14400000", "residential_street": "Rua da Cliente", "residential_number": "123", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "residential_complement": "Apto 2", "csrf_token": token(client)})
 
 
 def test_registration_requires_and_saves_residential_address_separately(app, client):
@@ -41,8 +41,8 @@ def test_registration_requires_and_saves_residential_address_separately(app, cli
     response = register(client)
     assert response.status_code == 200
     connection = sqlite3.connect(app.config["DATABASE"])
-    address = connection.execute("SELECT residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement FROM clients").fetchone()
-    assert address == ("14400000", "Rua da Cliente", "123", "Centro", "Franca", "SP", "Apto 2")
+    address = connection.execute("SELECT residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,email FROM clients").fetchone()
+    assert address == ("14400000", "Rua da Cliente", "123", "Centro", "Franca", "SP", "Apto 2", "cliente@example.com")
     assert b"RUA AFONSO BORGES DE FREITAS" in response.data
 
 
@@ -62,6 +62,34 @@ def test_staff_edits_and_client_sees_both_addresses(app, client):
     assert "Rua Nova" in page
     assert "Endereço Pickup (retirada)" in page
     assert "RUA AFONSO BORGES DE FREITAS" in page
+
+
+def test_client_edits_only_own_contact_and_residential_address(app, client):
+    register(client)
+    with client.session_transaction() as session:
+        session.clear(); session["client_id"] = 1; session["client_session_version"] = 1; session["csrf_token"] = "test-csrf"
+    response = client.post("/cliente/editar", data={"phone": "16977776666", "email": "novo@example.com",
+        "residential_cep": "14000002", "residential_street": "Rua Própria", "residential_number": "9",
+        "residential_district": "Jardim", "residential_city": "Franca", "residential_state": "SP",
+        "residential_complement": "Casa", "csrf_token": token(client)}, follow_redirects=True)
+    assert "Dados atualizados com sucesso" in response.text
+    connection = sqlite3.connect(app.config["DATABASE"])
+    row = connection.execute("SELECT name,cpf,phone,email,residential_street FROM clients WHERE id=1").fetchone()
+    assert row == ("Cliente Teste", "12345678901", "16977776666", "novo@example.com", "Rua Própria")
+
+
+def test_client_edit_rejects_invalid_email_and_requires_login(app, client):
+    register(client)
+    with client.session_transaction() as session: session.clear()
+    assert client.get("/cliente/editar").status_code == 302
+    with client.session_transaction() as session:
+        session["client_id"] = 1; session["client_session_version"] = 1; session["csrf_token"] = "test-csrf"
+    response = client.post("/cliente/editar", data={"phone": "16977776666", "email": "email-invalido",
+        "residential_cep": "14000002", "residential_street": "Rua Própria", "residential_number": "9",
+        "residential_district": "Jardim", "residential_city": "Franca", "residential_state": "SP",
+        "csrf_token": token(client)})
+    assert response.status_code == 400
+    assert sqlite3.connect(app.config["DATABASE"]).execute("SELECT email FROM clients WHERE id=1").fetchone()[0] == "cliente@example.com"
 
 
 def login(client):
@@ -346,6 +374,8 @@ def test_existing_database_migration_and_one_time_password_link(tmp_path):
     connection.execute("CREATE TABLE clients (id INTEGER PRIMARY KEY, public_id TEXT, name TEXT, cpf TEXT, phone TEXT, terms_version TEXT, signature TEXT, accepted_at TEXT)")
     connection.execute("INSERT INTO clients VALUES(1,'ADL-000001','Antigo','11111111111','16999999999','antiga','assinatura','2025-01-01T10:00:00-03:00')"); connection.commit(); connection.close()
     migrated = create_app({"TESTING": True, "SECRET_KEY": "x", "DATABASE": str(path)})
+    migrated_columns = {row[1] for row in sqlite3.connect(path).execute("PRAGMA table_info(clients)")}
+    assert {"email", "residential_cep", "residential_street", "residential_number"} <= migrated_columns
     c = migrated.test_client()
     with c.session_transaction() as session:
         session["staff"] = "staff"; session["csrf_token"] = "test-csrf"

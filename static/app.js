@@ -78,6 +78,60 @@ document.querySelectorAll('[data-copy]').forEach((button) => button.addEventList
   setTimeout(() => { button.innerText = previous; }, 1500);
 }));
 
+// Busca residencial pelo CEP. Cada nova alteração cancela a requisição anterior
+// e limpa os dados associados, evitando misturar endereços de CEPs diferentes.
+document.querySelectorAll('[data-cep-form]').forEach((container) => {
+  const cepInput = container.querySelector('[data-cep]');
+  const status = container.querySelector('[data-cep-status]');
+  const fields = {
+    residential_street: container.querySelector('[name="residential_street"]'),
+    residential_district: container.querySelector('[name="residential_district"]'),
+    residential_city: container.querySelector('[name="residential_city"]'),
+    residential_state: container.querySelector('[name="residential_state"]'),
+  };
+  let controller;
+  let lastCep = cepInput.value.replace(/\D/g, '');
+  const clearAddress = () => Object.values(fields).forEach((field) => { field.value = ''; });
+  cepInput.addEventListener('input', () => {
+    const digits = cepInput.value.replace(/\D/g, '').slice(0, 8);
+    cepInput.value = digits.replace(/(\d{5})(\d)/, '$1-$2');
+    controller?.abort();
+    if (digits !== lastCep) clearAddress();
+    lastCep = digits;
+    status.textContent = digits.length ? 'Informe os 8 dígitos do CEP.' : '';
+    status.className = 'cep-status';
+    if (digits.length !== 8) return;
+    controller = new AbortController();
+    status.textContent = 'Buscando endereço...';
+    status.classList.add('loading');
+    fetch(`https://viacep.com.br/ws/${digits}/json/`, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) throw new Error('Falha na consulta');
+        return response.json();
+      })
+      .then((data) => {
+        if (cepInput.value.replace(/\D/g, '') !== digits) return;
+        if (data.erro || !data.logradouro || !data.bairro || !data.localidade || !data.uf) {
+          throw new Error('CEP incompleto');
+        }
+        fields.residential_street.value = data.logradouro;
+        fields.residential_district.value = data.bairro;
+        fields.residential_city.value = data.localidade;
+        fields.residential_state.value = data.uf;
+        status.textContent = 'Endereço encontrado. Confira os dados e informe o número.';
+        status.className = 'cep-status success';
+        container.querySelector('[name="residential_number"]')?.focus();
+      })
+      .catch((error) => {
+        if (error.name === 'AbortError') return;
+        if (cepInput.value.replace(/\D/g, '') !== digits) return;
+        clearAddress();
+        status.textContent = 'CEP não encontrado ou consulta indisponível. Preencha ou corrija o endereço manualmente.';
+        status.className = 'cep-status error';
+      });
+  });
+});
+
 const clientId = document.querySelector('#client-id');
 const clientLabel = document.querySelector('#client-label');
 const clientResults = document.querySelector('#package-client-results');
@@ -157,7 +211,8 @@ if (registrationForm) {
   const storageKey = 'adelinha-registration-draft';
   try {
     const saved = JSON.parse(sessionStorage.getItem(storageKey) || '{}');
-    ['name', 'cpf', 'phone'].forEach((name) => {
+    ['name', 'cpf', 'phone', 'email', 'residential_cep', 'residential_street', 'residential_number',
+      'residential_district', 'residential_city', 'residential_state', 'residential_complement'].forEach((name) => {
       if (saved[name]) registrationForm.elements[name].value = saved[name];
     });
     registrationForm.elements.terms_accept.checked = Boolean(saved.terms_accept);
@@ -168,6 +223,14 @@ if (registrationForm) {
       name: registrationForm.elements.name.value,
       cpf: registrationForm.elements.cpf.value,
       phone: registrationForm.elements.phone.value,
+      email: registrationForm.elements.email.value,
+      residential_cep: registrationForm.elements.residential_cep.value,
+      residential_street: registrationForm.elements.residential_street.value,
+      residential_number: registrationForm.elements.residential_number.value,
+      residential_district: registrationForm.elements.residential_district.value,
+      residential_city: registrationForm.elements.residential_city.value,
+      residential_state: registrationForm.elements.residential_state.value,
+      residential_complement: registrationForm.elements.residential_complement.value,
       terms_accept: registrationForm.elements.terms_accept.checked,
       signature: registrationForm.querySelector('input[name="signature"]').value,
     }));

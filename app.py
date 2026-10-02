@@ -5,6 +5,7 @@ import hashlib
 import base64
 import math
 import re
+from email.utils import parseaddr
 from io import BytesIO
 from datetime import datetime, timedelta
 from functools import wraps
@@ -127,6 +128,13 @@ def create_app(test_config=None):
                 and all(data[field] for field in required)
                 and bool(re.fullmatch(r"[A-Za-z]{2}", data["residential_state"])))
 
+    def valid_email(value):
+        """E-mail é opcional, mas, quando informado, deve ter formato completo."""
+        if not value:
+            return True
+        parsed = parseaddr(value)[1]
+        return parsed == value and len(value) <= 254 and bool(re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value))
+
     def validate_package_form():
         data = package_form_data()
         tracking, shelf = data["tracking"].strip(), data["shelf"].strip()
@@ -189,15 +197,16 @@ def create_app(test_config=None):
         name = request.form.get("name", "").strip()
         cpf = digits(request.form.get("cpf", ""))
         phone = digits(request.form.get("phone", ""))
+        email = request.form.get("email", "").strip().lower()
         signature = request.form.get("signature", "")
         password = request.form.get("password", "")
         residential = residential_address_form()
         if request.form.get("terms_accept") != "yes":
             flash("É necessário aceitar as condições do serviço.", "error")
             return redirect(url_for("index") + "#cadastro")
-        if len(name) < 5 or len(cpf) != 11 or len(phone) < 10 or not signature.startswith("data:image/png;base64,") or len(password) < 8 or password != request.form.get("password_confirm") or not valid_residential_address(residential):
-            flash("Confira os dados, o endereço residencial obrigatório, a assinatura e as senhas (mínimo de 8 caracteres).", "error")
-            form = {"name": name, "cpf": request.form.get("cpf", ""), "phone": request.form.get("phone", ""), **residential}
+        if len(name) < 5 or len(cpf) != 11 or len(phone) < 10 or not valid_email(email) or not signature.startswith("data:image/png;base64,") or len(password) < 8 or password != request.form.get("password_confirm") or not valid_residential_address(residential):
+            flash("Confira os dados, o e-mail, o endereço residencial obrigatório, a assinatura e as senhas (mínimo de 8 caracteres).", "error")
+            form = {"name": name, "cpf": request.form.get("cpf", ""), "phone": request.form.get("phone", ""), "email": email, **residential}
             return render_template("index.html", registration_form=form), 400
         accepted_at = now().isoformat()
         if db().execute("SELECT 1 FROM clients WHERE cpf=?", (cpf,)).fetchone():
@@ -205,12 +214,12 @@ def create_app(test_config=None):
             return redirect(url_for("client_login"))
         cur = db().execute(
             """INSERT INTO clients(name, cpf, phone, terms_version, terms_text, signature, accepted_at, password_hash,
-               residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,email)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (name, cpf, phone, TERMS_VERSION, terms_text(), signature, accepted_at, generate_password_hash(password),
              digits(residential["residential_cep"]), residential["residential_street"], residential["residential_number"],
              residential["residential_district"], residential["residential_city"], residential["residential_state"].upper(),
-             residential["residential_complement"] or None),
+             residential["residential_complement"] or None, email or None),
         )
         client_id = cur.lastrowid
         public_id = f"ADL-{client_id:06d}"
@@ -283,6 +292,29 @@ def create_app(test_config=None):
                 pending.append(item)
         return render_template("client_area.html", client=client, pending=pending, packages=packages)
 
+    @app.route("/cliente/editar", methods=["GET", "POST"])
+    @client_login_required
+    def client_edit():
+        client = db().execute("SELECT * FROM clients WHERE id=?", (session["client_id"],)).fetchone()
+        if request.method == "GET":
+            return render_template("client_edit.html", client=client)
+        phone = digits(request.form.get("phone", ""))
+        email = request.form.get("email", "").strip().lower()
+        residential = residential_address_form()
+        if len(phone) < 10 or not valid_email(email) or not valid_residential_address(residential):
+            flash("Confira o WhatsApp, o e-mail e todos os campos obrigatórios do endereço residencial.", "error")
+            values = {**dict(client), **residential, "phone": request.form.get("phone", ""), "email": email}
+            return render_template("client_edit.html", client=values), 400
+        db().execute("""UPDATE clients SET phone=?,email=?,residential_cep=?,residential_street=?,residential_number=?,
+            residential_district=?,residential_city=?,residential_state=?,residential_complement=? WHERE id=?""",
+            (phone, email or None, digits(residential["residential_cep"]), residential["residential_street"],
+             residential["residential_number"], residential["residential_district"], residential["residential_city"],
+             residential["residential_state"].upper(), residential["residential_complement"] or None, session["client_id"]))
+        audit("editar_proprio_cadastro", "cliente", session["client_id"], "telefone, e-mail ou endereço residencial atualizados")
+        db().commit()
+        flash("Dados atualizados com sucesso", "success")
+        return redirect(url_for("client_area"))
+
     @app.get("/cliente/condicoes-aceitas")
     @client_login_required
     def client_accepted_terms():
@@ -346,14 +378,15 @@ def create_app(test_config=None):
             abort(404)
         name = request.form.get("name", "").strip()
         cpf, phone = digits(request.form.get("cpf", "")), digits(request.form.get("phone", ""))
+        email = request.form.get("email", "").strip().lower()
         residential = residential_address_form()
         duplicate = db().execute("SELECT 1 FROM clients WHERE cpf=? AND id!=?", (cpf, client_id)).fetchone()
-        if len(name) < 5 or len(cpf) != 11 or len(phone) < 10 or duplicate or not valid_residential_address(residential):
-            flash("Confira nome, CPF, WhatsApp e todos os campos obrigatórios do endereço residencial. O CPF não pode estar em outro cadastro.", "error")
+        if len(name) < 5 or len(cpf) != 11 or len(phone) < 10 or not valid_email(email) or duplicate or not valid_residential_address(residential):
+            flash("Confira nome, CPF, WhatsApp, e-mail e todos os campos obrigatórios do endereço residencial. O CPF não pode estar em outro cadastro.", "error")
             return redirect(url_for("staff_client", client_id=client_id))
-        db().execute("""UPDATE clients SET name=?,cpf=?,phone=?,residential_cep=?,residential_street=?,residential_number=?,
+        db().execute("""UPDATE clients SET name=?,cpf=?,phone=?,email=?,residential_cep=?,residential_street=?,residential_number=?,
             residential_district=?,residential_city=?,residential_state=?,residential_complement=? WHERE id=?""",
-            (name, cpf, phone, digits(residential["residential_cep"]), residential["residential_street"],
+            (name, cpf, phone, email or None, digits(residential["residential_cep"]), residential["residential_street"],
              residential["residential_number"], residential["residential_district"], residential["residential_city"],
              residential["residential_state"].upper(), residential["residential_complement"] or None, client_id))
         audit("editar", "cliente", client_id, "nome, CPF ou telefone atualizados")
@@ -717,7 +750,7 @@ def init_db(path):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
     connection.executescript("""
-    CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, name TEXT NOT NULL, cpf TEXT NOT NULL, phone TEXT NOT NULL, terms_version TEXT NOT NULL, terms_text TEXT, signature TEXT NOT NULL, accepted_at TEXT NOT NULL, password_hash TEXT, active INTEGER NOT NULL DEFAULT 1, session_version INTEGER NOT NULL DEFAULT 1, residential_cep TEXT, residential_street TEXT, residential_number TEXT, residential_district TEXT, residential_city TEXT, residential_state TEXT, residential_complement TEXT);
+    CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, name TEXT NOT NULL, cpf TEXT NOT NULL, phone TEXT NOT NULL, email TEXT, terms_version TEXT NOT NULL, terms_text TEXT, signature TEXT NOT NULL, accepted_at TEXT NOT NULL, password_hash TEXT, active INTEGER NOT NULL DEFAULT 1, session_version INTEGER NOT NULL DEFAULT 1, residential_cep TEXT, residential_street TEXT, residential_number TEXT, residential_district TEXT, residential_city TEXT, residential_state TEXT, residential_complement TEXT);
     CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, client_id INTEGER NOT NULL REFERENCES clients(id), tracking TEXT, width REAL NOT NULL, height REAL NOT NULL, length REAL NOT NULL, weight REAL NOT NULL, shelf TEXT, category TEXT NOT NULL, base_price REAL NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, notified_at TEXT, picked_at TEXT);
     CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, document_type TEXT, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_method TEXT, payment_confirmed INTEGER NOT NULL, payment_confirmed_at TEXT, payment_confirmed_by TEXT);
     CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id INTEGER REFERENCES pickups(id), package_id INTEGER UNIQUE REFERENCES packages(id), base_amount REAL NOT NULL, late_amount REAL NOT NULL, package_public_id TEXT, client_id INTEGER, client_name TEXT, client_public_id TEXT, tracking_code TEXT, package_category TEXT, notified_at TEXT, service_amount REAL, late_days INTEGER, total_amount REAL, PRIMARY KEY(pickup_id, package_id));
@@ -736,7 +769,7 @@ def init_db(path):
     ensure_columns(connection, "clients", {"active": "INTEGER NOT NULL DEFAULT 1", "session_version": "INTEGER NOT NULL DEFAULT 1",
         "residential_cep": "TEXT", "residential_street": "TEXT", "residential_number": "TEXT",
         "residential_district": "TEXT", "residential_city": "TEXT", "residential_state": "TEXT",
-        "residential_complement": "TEXT"})
+        "residential_complement": "TEXT", "email": "TEXT"})
     ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT"})
     ensure_columns(connection, "pickup_packages", {
         "package_public_id": "TEXT", "client_id": "INTEGER", "client_name": "TEXT", "client_public_id": "TEXT",
