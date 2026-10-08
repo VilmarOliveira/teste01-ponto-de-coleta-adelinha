@@ -330,6 +330,62 @@ def test_cash_pickup_saves_document_and_payment_confirmation(app, client):
     assert row[3] and row[4] == "staff"
 
 
+def test_percentage_discount_updates_pix_and_is_saved_in_history(app, client):
+    register(client)
+    login(client)
+    for package_id in (1, 2):
+        client.post("/pacotes", data={"client_id": 1, "tracking": f"TRK{package_id}", "shelf": f"A{package_id}",
+            "width": 10, "height": 10, "length": 10, "weight": 1, "csrf_token": token(client)})
+        client.post(f"/pacotes/{package_id}/avisar", data={"csrf_token": token(client)})
+    summary = client.post("/painel/retirada/resumo", data={"package_ids": ["1", "2"],
+        "discount_percent": "12,5", "csrf_token": token(client)})
+    assert summary.status_code == 200
+    assert summary.json["original_total"] == 10
+    assert summary.json["discount_amount"] == 1.25
+    assert summary.json["total"] == 8.75
+    assert "54048.75" in summary.json["pix_code"]
+
+    response = client.post("/retiradas", data={"package_ids": ["1", "2"], "receiver_name": "Cliente Teste",
+        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Pix",
+        "payment_confirmed": "yes", "discount_percent": "12,5", "pickup_signature": signature(),
+        "csrf_token": token(client)}, follow_redirects=True)
+    assert "Total antes do desconto" in response.text
+    assert "R$ 8,75" in response.text
+    row = sqlite3.connect(app.config["DATABASE"]).execute("""SELECT discount_type,discount_input,discount_amount,
+        original_total,final_total,total_paid,discount_applied_by FROM pickups""").fetchone()
+    assert row == ("porcentagem", 12.5, 1.25, 10, 8.75, 8.75, "staff")
+    detail = client.get("/painel/pacotes/1")
+    assert "12,50%" in detail.text and "Desconto autorizado por" in detail.text
+    pdf = client.get("/comprovantes/1/pacotes/1.pdf")
+    assert b"Total final pago: R$ 8,75" in pdf.data
+
+
+def test_fixed_discount_cash_and_invalid_discounts_are_server_validated(app, client):
+    register(client)
+    login(client)
+    client.post("/pacotes", data={"client_id": 1, "tracking": "TRK1", "shelf": "A1", "width": 10,
+        "height": 10, "length": 10, "weight": 1, "csrf_token": token(client)})
+    client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
+    for invalid in ({"discount_amount": "1", "discount_percent": "10"}, {"discount_amount": "5.01"},
+                    {"discount_percent": "100.01"}, {"discount_amount": "NaN"}):
+        response = client.post("/painel/retirada/resumo", data={"package_ids": "1", **invalid,
+            "csrf_token": token(client)})
+        assert response.status_code == 400
+    invalid_pickup = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Terceiro",
+        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro",
+        "payment_confirmed": "yes", "discount_amount": "1", "discount_percent": "10",
+        "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
+    assert "Use somente desconto" in invalid_pickup.text
+    assert sqlite3.connect(app.config["DATABASE"]).execute("SELECT COUNT(*) FROM pickups").fetchone()[0] == 0
+    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Terceiro",
+        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro",
+        "payment_confirmed": "yes", "discount_amount": "2,50", "pickup_signature": signature(),
+        "csrf_token": token(client)})
+    assert response.status_code == 302
+    row = sqlite3.connect(app.config["DATABASE"]).execute("SELECT discount_type,discount_input,discount_amount,original_total,final_total,total_paid FROM pickups").fetchone()
+    assert row == ("valor", 2.5, 2.5, 5, 2.5, 2.5)
+
+
 def test_terms_acceptance_is_required(client):
     response = client.post("/cadastro", data={"name": "Sem Aceite", "cpf": "12345678901", "phone": "16999999999", "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura", "csrf_token": token(client)}, follow_redirects=True)
     assert "necessário aceitar" in response.text

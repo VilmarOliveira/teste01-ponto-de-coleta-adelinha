@@ -18,7 +18,7 @@ from reportlab.pdfgen import canvas
 import qrcode
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from core import TZ, calculate_fees, classify_package, pix_payload
+from core import TZ, calculate_discount, calculate_fees, classify_package, pix_payload
 
 ROOT = Path(__file__).parent
 TERMS_VERSION = "MINUTA-TESTE-v1"
@@ -616,12 +616,20 @@ def create_app(test_config=None):
             return {"error": "Há pacote indisponível para retirada."}, 400
         totals = [fees(package) for package in packages]
         total = round(sum(item["total"] for item in totals), 2)
+        try:
+            discount_type, discount_input, discount_amount, original_total, final_total = calculate_discount(total, request.form.get("discount_amount", ""), request.form.get("discount_percent", ""))
+        except ValueError as error:
+            return {"error": str(error)}, 400
         setting = db().execute("SELECT pix_receiver_name FROM settings WHERE id=1").fetchone()
         receiver = setting["pix_receiver_name"]
-        payload = pix_payload(PIX_KEY, receiver, total) if receiver else None
+        payload = pix_payload(PIX_KEY, receiver, float(final_total)) if receiver and final_total > 0 else None
         qr_data = qr_code_data_url(payload) if payload else None
-        return {"total": total, "total_display": f"R$ {total:.2f}".replace(".", ","), "pix_code": payload, "qr_code": qr_data,
-            "pix_configured": bool(receiver)}
+        return {"total": float(final_total), "original_total": float(original_total), "discount_amount": float(discount_amount),
+            "total_display": f"R$ {final_total:.2f}".replace(".", ","),
+            "original_total_display": f"R$ {original_total:.2f}".replace(".", ","),
+            "discount_display": f"R$ {discount_amount:.2f}".replace(".", ","),
+            "discount_type": discount_type, "discount_input": float(discount_input) if discount_input is not None else None,
+            "pix_code": payload, "qr_code": qr_data, "pix_configured": bool(receiver), "pix_zero_total": final_total == 0}
 
     @app.post("/retiradas")
     @login_required
@@ -671,15 +679,25 @@ def create_app(test_config=None):
                 return redirect(url_for("dashboard"))
 
             totals = [fees(package) for package in packages]
+            try:
+                discount_type, discount_input, discount_amount, original_total, final_total = calculate_discount(sum(x["total"] for x in totals), request.form.get("discount_amount", ""), request.form.get("discount_percent", ""))
+            except ValueError as error:
+                connection.rollback()
+                flash(str(error), "error")
+                return redirect(url_for("dashboard"))
             picked_at = now().isoformat()
             if payment_method == "Pix" and not connection.execute("SELECT pix_receiver_name FROM settings WHERE id=1 AND pix_receiver_name IS NOT NULL AND trim(pix_receiver_name)!=''").fetchone():
                 connection.rollback()
                 flash("Configure o nome do recebedor Pix antes de confirmar um pagamento Pix.", "error")
                 return redirect(url_for("dashboard"))
             cur = connection.execute("""INSERT INTO pickups(receiver_name,receiver_document,document_type,signature,staff,picked_at,
-                base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by)
-                VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?)""",
-                (receiver, document, document_type, signature, session["staff"], picked_at, sum(x["base"] for x in totals), sum(x["late_fee"] for x in totals), sum(x["total"] for x in totals), payment_method, picked_at, session["staff"]))
+                base_total,late_total,total_paid,payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,
+                discount_type,discount_input,discount_amount,original_total,final_total,discount_applied_by)
+                VALUES(?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)""",
+                (receiver, document, document_type, signature, session["staff"], picked_at, sum(x["base"] for x in totals),
+                 sum(x["late_fee"] for x in totals), float(final_total), payment_method, picked_at, session["staff"],
+                 discount_type, float(discount_input) if discount_input is not None else None, float(discount_amount),
+                 float(original_total), float(final_total), session["staff"]))
             pickup_id = cur.lastrowid
             for package, total in zip(packages, totals):
                 owner = connection.execute("SELECT id,name,public_id FROM clients WHERE id=?", (package["client_id"],)).fetchone()
@@ -752,7 +770,7 @@ def init_db(path):
     connection.executescript("""
     CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, name TEXT NOT NULL, cpf TEXT NOT NULL, phone TEXT NOT NULL, email TEXT, terms_version TEXT NOT NULL, terms_text TEXT, signature TEXT NOT NULL, accepted_at TEXT NOT NULL, password_hash TEXT, active INTEGER NOT NULL DEFAULT 1, session_version INTEGER NOT NULL DEFAULT 1, residential_cep TEXT, residential_street TEXT, residential_number TEXT, residential_district TEXT, residential_city TEXT, residential_state TEXT, residential_complement TEXT);
     CREATE TABLE IF NOT EXISTS packages (id INTEGER PRIMARY KEY, public_id TEXT UNIQUE, client_id INTEGER NOT NULL REFERENCES clients(id), tracking TEXT, width REAL NOT NULL, height REAL NOT NULL, length REAL NOT NULL, weight REAL NOT NULL, shelf TEXT, category TEXT NOT NULL, base_price REAL NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, notified_at TEXT, picked_at TEXT);
-    CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, document_type TEXT, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_method TEXT, payment_confirmed INTEGER NOT NULL, payment_confirmed_at TEXT, payment_confirmed_by TEXT);
+    CREATE TABLE IF NOT EXISTS pickups (id INTEGER PRIMARY KEY, receiver_name TEXT NOT NULL, receiver_document TEXT NOT NULL, document_type TEXT, signature TEXT NOT NULL, staff TEXT NOT NULL, picked_at TEXT NOT NULL, base_total REAL NOT NULL, late_total REAL NOT NULL, total_paid REAL NOT NULL, payment_method TEXT, payment_confirmed INTEGER NOT NULL, payment_confirmed_at TEXT, payment_confirmed_by TEXT, discount_type TEXT, discount_input REAL, discount_amount REAL, original_total REAL, final_total REAL, discount_applied_by TEXT);
     CREATE TABLE IF NOT EXISTS pickup_packages (pickup_id INTEGER REFERENCES pickups(id), package_id INTEGER UNIQUE REFERENCES packages(id), base_amount REAL NOT NULL, late_amount REAL NOT NULL, package_public_id TEXT, client_id INTEGER, client_name TEXT, client_public_id TEXT, tracking_code TEXT, package_category TEXT, notified_at TEXT, service_amount REAL, late_days INTEGER, total_amount REAL, PRIMARY KEY(pickup_id, package_id));
     CREATE TABLE IF NOT EXISTS password_tokens (id INTEGER PRIMARY KEY, client_id INTEGER NOT NULL REFERENCES clients(id), token_hash TEXT UNIQUE NOT NULL, expires_at TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL, used_at TEXT);
     CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, identifier TEXT NOT NULL, succeeded INTEGER NOT NULL, attempted_at TEXT NOT NULL);
@@ -770,7 +788,9 @@ def init_db(path):
         "residential_cep": "TEXT", "residential_street": "TEXT", "residential_number": "TEXT",
         "residential_district": "TEXT", "residential_city": "TEXT", "residential_state": "TEXT",
         "residential_complement": "TEXT", "email": "TEXT"})
-    ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT"})
+    ensure_columns(connection, "pickups", {"payment_method": "TEXT", "document_type": "TEXT", "payment_confirmed_at": "TEXT", "payment_confirmed_by": "TEXT",
+        "discount_type": "TEXT", "discount_input": "REAL", "discount_amount": "REAL", "original_total": "REAL",
+        "final_total": "REAL", "discount_applied_by": "TEXT"})
     ensure_columns(connection, "pickup_packages", {
         "package_public_id": "TEXT", "client_id": "INTEGER", "client_name": "TEXT", "client_public_id": "TEXT",
         "tracking_code": "TEXT", "package_category": "TEXT", "notified_at": "TEXT",
@@ -821,6 +841,10 @@ def build_receipt_pdf(withdrawal, packages):
     pdf.setFont("Helvetica-Bold", 16)
     pdf.drawString(45, height - 50, "PONTO DE COLETA ADELINHA")
     pdf.setFont("Helvetica", 9)
+    discount_input = display(withdrawal["discount_input"])
+    if withdrawal["discount_input"] is not None:
+        discount_input = (f"{float(withdrawal['discount_input']):.2f}%" if withdrawal["discount_type"] == "porcentagem"
+                          else display(withdrawal["discount_input"], True))
     lines = [
         "CNPJ: 38.145.273/0001-05",
         ADDRESS,
@@ -835,7 +859,13 @@ def build_receipt_pdf(withdrawal, packages):
         f"Valor do serviço: {display(withdrawal['service_amount'], True)}",
         f"Dias de atraso: {display(withdrawal['late_days'])}",
         f"Taxa extra: {display(withdrawal['late_amount'], True)}",
-        f"Total pago: {display(withdrawal['total_amount'], True)}",
+        f"Valor deste pacote antes do desconto: {display(withdrawal['total_amount'], True)}",
+        f"Total original da retirada: {display(withdrawal['original_total'], True)}",
+        f"Modalidade do desconto: {withdrawal['discount_type'] or ('Sem desconto' if withdrawal['original_total'] is not None else 'Não registrado')}",
+        f"Valor/percentual informado: {discount_input}",
+        f"Desconto calculado: {display(withdrawal['discount_amount'], True)}",
+        f"Total final pago: {display(withdrawal['final_total'] if withdrawal['final_total'] is not None else withdrawal['total_paid'], True)}",
+        f"Desconto autorizado por: {display(withdrawal['discount_applied_by'])}",
         f"Forma de pagamento: {display(withdrawal['payment_method'])}",
         f"Pagamento confirmado: {format_local(withdrawal['payment_confirmed_at'])}",
         f"Atendente: {display(withdrawal['payment_confirmed_by'] or withdrawal['staff'])}",
@@ -851,7 +881,7 @@ def build_receipt_pdf(withdrawal, packages):
     for item in packages:
         pdf.drawString(45, y, f"{display(item['package_public_id'])} | rastreio {display(item['tracking_code'])} | {display(item['package_category'])} | total {display(item['total_amount'], True)}")
         y -= 14
-    pdf.drawString(45, y, f"TOTAL DA RETIRADA: {display(withdrawal['total_paid'], True)}")
+    pdf.drawString(45, y, f"TOTAL FINAL DA RETIRADA: {display(withdrawal['final_total'] if withdrawal['final_total'] is not None else withdrawal['total_paid'], True)}")
     y -= 20
     statement = "Confirmo que retirei o pacote identificado neste comprovante e que o pagamento informado foi realizado."
     pdf.setFont("Helvetica-Bold", 9)

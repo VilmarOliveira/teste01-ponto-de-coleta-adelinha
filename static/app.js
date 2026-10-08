@@ -265,8 +265,12 @@ const paymentBox = document.querySelector('#payment-summary');
 const pixArea = document.querySelector('#pix-area');
 const confirmation = document.querySelector('#payment-confirmed');
 const submitPickup = document.querySelector('#pickup-submit');
+const discountAmount = document.querySelector('#discount-amount');
+const discountPercent = document.querySelector('#discount-percent');
+let paymentRequest = 0;
 async function updatePayment() {
   if (!pickupForm) return;
+  const currentRequest = ++paymentRequest;
   confirmation.checked = false;
   const method = pickupForm.querySelector('[name="payment_method"]:checked')?.value;
   const ids = [...document.querySelectorAll('[name="package_ids"]:checked')];
@@ -277,21 +281,40 @@ async function updatePayment() {
   if (!method || !ids.length) return;
   const body = new FormData();
   ids.forEach((checkbox) => body.append('package_ids', checkbox.value));
+  body.append('discount_amount', discountAmount?.value || '');
+  body.append('discount_percent', discountPercent?.value || '');
   body.append('csrf_token', document.querySelector('meta[name="csrf-token"]').content);
   const response = await fetch('/painel/retirada/resumo', { method: 'POST', body });
   const data = await response.json();
+  if (currentRequest !== paymentRequest) return;
   if (!response.ok) { alert(data.error); return; }
+  document.querySelector('#pickup-original-total').textContent = data.original_total_display;
+  document.querySelector('#pickup-discount').textContent = data.discount_display;
   document.querySelector('#pickup-total').textContent = data.total_display;
   if (method === 'Pix') {
     if (!data.pix_configured) {
       pixArea.innerHTML = '<p class="flash error">Configure o nome do recebedor Pix antes de continuar.</p>';
+    } else if (data.pix_zero_total) {
+      document.querySelector('#pix-qr').removeAttribute('src');
+      document.querySelector('#pix-code').value = '';
+      document.querySelector('#pix-code').placeholder = 'Total zerado: não é necessário gerar cobrança Pix.';
     } else {
       document.querySelector('#pix-qr').src = data.qr_code;
       document.querySelector('#pix-code').value = data.pix_code;
+      document.querySelector('#pix-code').placeholder = '';
     }
   }
 }
 document.querySelectorAll('[name="package_ids"], [name="payment_method"]').forEach((input) => input.addEventListener('change', updatePayment));
+let discountTimer;
+[[discountAmount, discountPercent], [discountPercent, discountAmount]].forEach(([field, other]) => {
+  field?.addEventListener('input', () => {
+    if (field.value) other.value = '';
+    confirmation.checked = false;
+    clearTimeout(discountTimer);
+    discountTimer = setTimeout(updatePayment, 180);
+  });
+});
 
 if (pickupForm) {
   const key = 'adelinha-pickup-draft';
@@ -306,6 +329,8 @@ if (pickupForm) {
       const method = pickupForm.querySelector(`[name="payment_method"][value="${draft.payment_method}"]`);
       if (method) method.checked = true;
     }
+    discountAmount.value = draft.discount_amount || '';
+    discountPercent.value = draft.discount_percent || '';
     (draft.package_ids || []).forEach((id) => {
       const field = document.querySelector(`[name="package_ids"][value="${id}"]`);
       if (field) field.checked = true;
@@ -319,6 +344,8 @@ if (pickupForm) {
       document_type: pickupForm.elements.document_type.value,
       receiver_document: pickupForm.elements.receiver_document.value,
       payment_method: pickupForm.querySelector('[name="payment_method"]:checked')?.value,
+      discount_amount: discountAmount.value,
+      discount_percent: discountPercent.value,
       package_ids: [...document.querySelectorAll('[name="package_ids"]:checked')].map((item) => item.value),
       signature: pickupForm.querySelector('.signature-value').value,
     }));

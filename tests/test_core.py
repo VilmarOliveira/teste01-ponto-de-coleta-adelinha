@@ -2,13 +2,25 @@ from datetime import date
 
 import pytest
 
-from core import calculate_fees, classify_package, pix_payload
+from core import calculate_discount, calculate_fees, classify_package, pix_payload
 
 
 def test_pix_limits_long_holder_name_to_emv_standard():
     payload = pix_payload("38145273000105", "AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS", 5)
     assert "5925AMOR INFINITO MARKETING" in payload
     assert "SOLUCOES EMPRESARIAIS" not in payload
+
+
+def test_discount_by_value_and_percentage_rounds_to_two_decimals():
+    assert tuple(map(str, calculate_discount(10, "2,50", ""))) == ("valor", "2.50", "2.50", "10.00", "7.50")
+    assert tuple(map(str, calculate_discount(10, "", "12,5"))) == ("porcentagem", "12.5", "1.25", "10.00", "8.75")
+    assert tuple(map(str, calculate_discount(5, "", "100")))[-1] == "0.00"
+
+
+@pytest.mark.parametrize(("amount", "percent"), [("1", "10"), ("5.01", ""), ("", "100.01"), ("NaN", "")])
+def test_invalid_discount_is_rejected(amount, percent):
+    with pytest.raises(ValueError):
+        calculate_discount(5, amount, percent)
 
 
 @pytest.mark.parametrize("dimensions,weight,expected", [

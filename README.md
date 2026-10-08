@@ -153,4 +153,9 @@ A inicialização acrescenta, sem apagar tabelas, os campos de cliente ativo e v
 - Confirmação explícita inicia o prazo; abrir/reabrir WhatsApp não o altera.
 - O dia do aviso é o primeiro dos quatro; R$ 0,50 por data corrida desde o quinto dia.
 - Retirada total ou parcial, por Pix ou dinheiro com confirmação manual, identificação e assinatura; pacote retirado não pode ser retirado novamente.
+- Desconto opcional na retirada, em reais ou porcentagem, calculado sobre o total com atraso e preservado no histórico, recibo e PDF.
 - Comprovante persistente e imprimível/salvável em PDF pelo navegador.
+
+### Descontos na retirada
+
+Somente um atendente autenticado pode aplicar desconto. Na Área do Ponto, informe **Desconto em valor (R$)** ou **Desconto em porcentagem (%)**; preencher uma modalidade limpa a outra. O servidor recalcula e valida o total, e o valor final é usado tanto no Pix quanto no recebimento em dinheiro. A migração acrescenta os campos históricos de desconto sem modificar retiradas antigas, que continuam exibindo os valores originalmente gravados.

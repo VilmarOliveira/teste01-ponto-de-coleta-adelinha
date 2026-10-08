@@ -5,8 +5,37 @@ Manter os cálculos aqui permite testá-los mesmo em um ambiente sem Flask.
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 import unicodedata
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 TZ = ZoneInfo("America/Sao_Paulo")
+
+
+def calculate_discount(total, amount_text="", percent_text=""):
+    """Valida uma modalidade de desconto e calcula totais com duas casas."""
+    amount_text, percent_text = str(amount_text).strip(), str(percent_text).strip()
+    if amount_text and percent_text:
+        raise ValueError("Use somente desconto em reais ou desconto em porcentagem.")
+    original = Decimal(str(total)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    if not amount_text and not percent_text:
+        return None, None, Decimal("0.00"), original, original
+    try:
+        entered = Decimal((amount_text or percent_text).replace(",", "."))
+    except InvalidOperation:
+        raise ValueError("Informe um desconto numérico válido.")
+    if not entered.is_finite():
+        raise ValueError("Informe um desconto numérico válido.")
+    if amount_text:
+        if entered < 0 or entered > original:
+            raise ValueError("O desconto em reais deve estar entre zero e o total da retirada.")
+        discount = entered.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        mode = "valor"
+    else:
+        if entered < 0 or entered > 100:
+            raise ValueError("O desconto em porcentagem deve estar entre 0% e 100%.")
+        discount = (original * entered / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        mode = "porcentagem"
+    final = max(Decimal("0.00"), original - discount).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return mode, entered, discount, original, final
 
 
 def classify_package(width: float, height: float, length: float, weight: float):
