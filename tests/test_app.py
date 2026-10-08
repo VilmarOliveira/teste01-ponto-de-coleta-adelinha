@@ -386,6 +386,51 @@ def test_fixed_discount_cash_and_invalid_discounts_are_server_validated(app, cli
     assert row == ("valor", 2.5, 2.5, 5, 2.5, 2.5)
 
 
+def test_surcharge_precedes_discount_updates_pix_and_persists_reason(app, client):
+    register(client)
+    login(client)
+    client.post("/pacotes", data={"client_id": 1, "tracking": "TRK1", "shelf": "A1", "width": 10,
+        "height": 10, "length": 10, "weight": 1, "csrf_token": token(client)})
+    client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
+    summary = client.post("/painel/retirada/resumo", data={"package_ids": "1", "surcharge_amount": "3,00",
+        "surcharge_reason": "Servico adicional", "discount_percent": "25", "csrf_token": token(client)})
+    assert summary.status_code == 200
+    assert summary.json["package_total"] == 5
+    assert summary.json["surcharge_amount"] == 3
+    assert summary.json["original_total"] == 8
+    assert summary.json["discount_amount"] == 2
+    assert summary.json["total"] == 6
+    assert "54046.00" in summary.json["pix_code"]
+    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Cliente Teste",
+        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Pix",
+        "payment_confirmed": "yes", "surcharge_amount": "3,00", "surcharge_reason": "Servico adicional",
+        "discount_percent": "25", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
+    assert "Servico adicional" in response.text and "R$ 6,00" in response.text
+    row = sqlite3.connect(app.config["DATABASE"]).execute("""SELECT surcharge_amount,surcharge_reason,
+        surcharge_applied_by,original_total,discount_amount,final_total,total_paid FROM pickups""").fetchone()
+    assert row == (3, "Servico adicional", "staff", 8, 2, 6, 6)
+    detail = client.get("/painel/pacotes/1")
+    assert "Motivo do acréscimo" in detail.text and "Servico adicional" in detail.text
+    pdf = client.get("/comprovantes/1/pacotes/1.pdf")
+    assert "Servico adicional".encode() in pdf.data
+
+
+def test_positive_surcharge_without_reason_is_rejected_by_server(app, client):
+    register(client)
+    login(client)
+    client.post("/pacotes", data={"client_id": 1, "tracking": "TRK1", "shelf": "A1", "width": 10,
+        "height": 10, "length": 10, "weight": 1, "csrf_token": token(client)})
+    client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
+    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Cliente Teste",
+        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro",
+        "payment_confirmed": "yes", "surcharge_amount": "1,00", "pickup_signature": signature(),
+        "csrf_token": token(client)}, follow_redirects=True)
+    assert "Informe o motivo do acréscimo" in response.text
+    connection = sqlite3.connect(app.config["DATABASE"])
+    assert connection.execute("SELECT COUNT(*) FROM pickups").fetchone()[0] == 0
+    assert connection.execute("SELECT status FROM packages WHERE id=1").fetchone()[0] == "aguardando_retirada"
+
+
 def test_terms_acceptance_is_required(client):
     response = client.post("/cadastro", data={"name": "Sem Aceite", "cpf": "12345678901", "phone": "16999999999", "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura", "csrf_token": token(client)}, follow_redirects=True)
     assert "necessário aceitar" in response.text

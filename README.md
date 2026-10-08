@@ -154,8 +154,13 @@ A inicialização acrescenta, sem apagar tabelas, os campos de cliente ativo e v
 - O dia do aviso é o primeiro dos quatro; R$ 0,50 por data corrida desde o quinto dia.
 - Retirada total ou parcial, por Pix ou dinheiro com confirmação manual, identificação e assinatura; pacote retirado não pode ser retirado novamente.
 - Desconto opcional na retirada, em reais ou porcentagem, calculado sobre o total com atraso e preservado no histórico, recibo e PDF.
+- Acréscimo manual opcional, separado da taxa automática de atraso, com motivo obrigatório e histórico do atendente responsável.
 - Comprovante persistente e imprimível/salvável em PDF pelo navegador.
 
 ### Descontos na retirada
 
 Somente um atendente autenticado pode aplicar desconto. Na Área do Ponto, informe **Desconto em valor (R$)** ou **Desconto em porcentagem (%)**; preencher uma modalidade limpa a outra. O servidor recalcula e valida o total, e o valor final é usado tanto no Pix quanto no recebimento em dinheiro. A migração acrescenta os campos históricos de desconto sem modificar retiradas antigas, que continuam exibindo os valores originalmente gravados.
+
+### Acréscimo na retirada
+
+O atendente pode informar um acréscimo monetário não negativo com até duas casas decimais. Quando o valor for maior que zero, o motivo é obrigatório. O sistema soma pacotes, atraso e acréscimo e, somente depois, aplica o desconto escolhido. Valor, motivo, atendente, subtotal, desconto e total final ficam preservados no recibo, nos detalhes e no PDF. A migração adiciona esses campos sem alterar retiradas antigas.

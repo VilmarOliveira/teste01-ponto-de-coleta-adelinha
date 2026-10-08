@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from core import calculate_discount, calculate_fees, classify_package, pix_payload
+from core import calculate_discount, calculate_fees, classify_package, pix_payload, validate_surcharge
 
 
 def test_pix_limits_long_holder_name_to_emv_standard():
@@ -21,6 +21,14 @@ def test_discount_by_value_and_percentage_rounds_to_two_decimals():
 def test_invalid_discount_is_rejected(amount, percent):
     with pytest.raises(ValueError):
         calculate_discount(5, amount, percent)
+
+
+def test_surcharge_requires_reason_and_two_decimal_non_negative_amount():
+    assert tuple(map(str, validate_surcharge("2,50", "Embalagem reforçada"))) == ("2.50", "Embalagem reforçada")
+    assert tuple(map(str, validate_surcharge("0,00", ""))) == ("0.00", "None")
+    for amount, reason in (("1", ""), ("-1", "Motivo"), ("1.001", "Motivo"), ("NaN", "Motivo")):
+        with pytest.raises(ValueError):
+            validate_surcharge(amount, reason)
 
 
 @pytest.mark.parametrize("dimensions,weight,expected", [

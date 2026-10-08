@@ -38,6 +38,24 @@ def calculate_discount(total, amount_text="", percent_text=""):
     return mode, entered, discount, original, final
 
 
+def validate_surcharge(amount_text="0", reason=""):
+    """Valida um acréscimo manual, separado da taxa automática de atraso."""
+    text = str(amount_text or "0").strip().replace(",", ".")
+    try:
+        amount = Decimal(text)
+    except InvalidOperation:
+        raise ValueError("Informe um acréscimo monetário válido.")
+    if not amount.is_finite() or amount < 0 or amount.as_tuple().exponent < -2:
+        raise ValueError("O acréscimo deve ser não negativo e ter no máximo duas casas decimais.")
+    amount = amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    clean_reason = str(reason).strip()
+    if amount > 0 and not clean_reason:
+        raise ValueError("Informe o motivo do acréscimo.")
+    if len(clean_reason) > 300:
+        raise ValueError("O motivo do acréscimo deve ter no máximo 300 caracteres.")
+    return amount, clean_reason or None
+
+
 def classify_package(width: float, height: float, length: float, weight: float):
     """Retorna (categoria, preço) ou levanta ValueError para pacote recusado."""
     dimensions = (width, height, length)

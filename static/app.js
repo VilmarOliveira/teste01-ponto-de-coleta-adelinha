@@ -267,6 +267,8 @@ const confirmation = document.querySelector('#payment-confirmed');
 const submitPickup = document.querySelector('#pickup-submit');
 const discountAmount = document.querySelector('#discount-amount');
 const discountPercent = document.querySelector('#discount-percent');
+const surchargeAmount = document.querySelector('#surcharge-amount');
+const surchargeReason = document.querySelector('#surcharge-reason');
 let paymentRequest = 0;
 async function updatePayment() {
   if (!pickupForm) return;
@@ -283,11 +285,15 @@ async function updatePayment() {
   ids.forEach((checkbox) => body.append('package_ids', checkbox.value));
   body.append('discount_amount', discountAmount?.value || '');
   body.append('discount_percent', discountPercent?.value || '');
+  body.append('surcharge_amount', surchargeAmount?.value || '0');
+  body.append('surcharge_reason', surchargeReason?.value || '');
   body.append('csrf_token', document.querySelector('meta[name="csrf-token"]').content);
   const response = await fetch('/painel/retirada/resumo', { method: 'POST', body });
   const data = await response.json();
   if (currentRequest !== paymentRequest) return;
   if (!response.ok) { alert(data.error); return; }
+  document.querySelector('#pickup-package-total').textContent = data.package_total_display;
+  document.querySelector('#pickup-surcharge').textContent = data.surcharge_display;
   document.querySelector('#pickup-original-total').textContent = data.original_total_display;
   document.querySelector('#pickup-discount').textContent = data.discount_display;
   document.querySelector('#pickup-total').textContent = data.total_display;
@@ -315,6 +321,13 @@ let discountTimer;
     discountTimer = setTimeout(updatePayment, 180);
   });
 });
+[surchargeAmount, surchargeReason].forEach((field) => field?.addEventListener('input', () => {
+  const amount = Number((surchargeAmount.value || '0').replace(',', '.'));
+  surchargeReason.required = Number.isFinite(amount) && amount > 0;
+  confirmation.checked = false;
+  clearTimeout(discountTimer);
+  discountTimer = setTimeout(updatePayment, 180);
+}));
 
 if (pickupForm) {
   const key = 'adelinha-pickup-draft';
@@ -331,6 +344,9 @@ if (pickupForm) {
     }
     discountAmount.value = draft.discount_amount || '';
     discountPercent.value = draft.discount_percent || '';
+    surchargeAmount.value = draft.surcharge_amount || '0,00';
+    surchargeReason.value = draft.surcharge_reason || '';
+    surchargeAmount.dispatchEvent(new Event('input'));
     (draft.package_ids || []).forEach((id) => {
       const field = document.querySelector(`[name="package_ids"][value="${id}"]`);
       if (field) field.checked = true;
@@ -346,6 +362,8 @@ if (pickupForm) {
       payment_method: pickupForm.querySelector('[name="payment_method"]:checked')?.value,
       discount_amount: discountAmount.value,
       discount_percent: discountPercent.value,
+      surcharge_amount: surchargeAmount.value,
+      surcharge_reason: surchargeReason.value,
       package_ids: [...document.querySelectorAll('[name="package_ids"]:checked')].map((item) => item.value),
       signature: pickupForm.querySelector('.signature-value').value,
     }));
