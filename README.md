@@ -152,7 +152,7 @@ A inicialização acrescenta, sem apagar tabelas, os campos de cliente ativo e v
 - Pequeno: soma ≤ 80 cm **e** peso ≤ 10 kg; grande: soma ≤ 150 cm **e** peso ≤ 20 kg; acima disso é recusado.
 - Confirmação explícita inicia o prazo; abrir/reabrir WhatsApp não o altera.
 - O dia do aviso é o primeiro dos quatro; R$ 0,50 por data corrida desde o quinto dia.
-- Retirada total ou parcial por Pix, dinheiro, cartão de débito ou cartão de crédito, sempre com confirmação manual, identificação e assinatura; pacote retirado não pode ser retirado novamente.
+- Retirada total ou parcial por Pix ou dinheiro, sempre com confirmação manual, identificação e assinatura; pacote retirado não pode ser retirado novamente.
 - Desconto opcional na retirada, em reais ou porcentagem, calculado sobre o total com atraso e preservado no histórico, recibo e PDF.
 - Acréscimo manual opcional, separado da taxa automática de atraso, com motivo obrigatório e histórico do atendente responsável.
 - Comprovante persistente e imprimível/salvável em PDF pelo navegador.
@@ -163,4 +163,4 @@ Somente um atendente autenticado pode aplicar desconto. Na Área do Ponto, infor
 
 ### Acréscimo na retirada
 
-O atendente pode informar um acréscimo monetário não negativo com até duas casas decimais. Quando o valor for maior que zero, o motivo é obrigatório. O sistema soma pacotes, atraso e acréscimo e, somente depois, aplica o desconto escolhido. Valor, motivo, atendente, subtotal, desconto e total final ficam preservados no recibo, nos detalhes e no PDF. A migração adiciona esses campos sem alterar retiradas antigas.
+O atendente pode informar um acréscimo monetário não negativo com até duas casas decimais. Quando o valor for maior que zero, o motivo é obrigatório. O sistema soma pacotes e atraso, aplica o desconto escolhido e, em seguida, adiciona o acréscimo manual. Valor, motivo, atendente, subtotal, desconto e total final ficam preservados no recibo, nos detalhes e no PDF. A migração adiciona esses campos sem alterar retiradas antigas.

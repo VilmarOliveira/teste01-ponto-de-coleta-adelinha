@@ -277,15 +277,12 @@ async function updatePayment() {
   const method = pickupForm.querySelector('[name="payment_method"]:checked')?.value;
   const ids = [...document.querySelectorAll('[name="package_ids"]:checked')];
   paymentBox.hidden = !method || !ids.length;
-  const card = method === 'Cartão de débito' || method === 'Cartão de crédito';
   submitPickup.textContent = !method ? 'Selecione a forma de pagamento'
     : method === 'Pix' ? 'Confirmar pagamento Pix e concluir retirada'
-      : method === 'Dinheiro' ? 'Confirmar recebimento em dinheiro e concluir retirada'
-        : `Confirmar pagamento no ${method.toLowerCase()} e concluir retirada`;
+      : 'Confirmar recebimento em dinheiro e concluir retirada';
   document.querySelector('#payment-confirmation-text').textContent = method === 'Pix'
     ? 'Conferi o pagamento Pix na conta e confirmo o recebimento.'
-    : method === 'Dinheiro' ? 'Conferi o recebimento em dinheiro.'
-      : card ? 'Conferi a aprovação na maquininha e confirmo o recebimento.' : 'Confirmo o recebimento.';
+    : 'Conferi o recebimento em dinheiro.';
   pixArea.hidden = method !== 'Pix';
   if (!method || !ids.length) return;
   const body = new FormData();
@@ -300,9 +297,8 @@ async function updatePayment() {
   if (currentRequest !== paymentRequest) return;
   if (!response.ok) { alert(data.error); return; }
   document.querySelector('#pickup-package-total').textContent = data.package_total_display;
-  document.querySelector('#pickup-surcharge').textContent = data.surcharge_display;
-  document.querySelector('#pickup-original-total').textContent = data.original_total_display;
   document.querySelector('#pickup-discount').textContent = data.discount_display;
+  document.querySelector('#pickup-surcharge').textContent = data.surcharge_display;
   document.querySelector('#pickup-total').textContent = data.total_display;
   if (method === 'Pix') {
     if (!data.pix_configured) {

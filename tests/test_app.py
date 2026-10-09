@@ -330,29 +330,32 @@ def test_cash_pickup_saves_document_and_payment_confirmation(app, client):
     assert row[3] and row[4] == "staff"
 
 
-@pytest.mark.parametrize("payment_method", ["Cartão de débito", "Cartão de crédito"])
-def test_card_payment_is_confirmed_manually_and_kept_in_receipt_pdf(app, client, payment_method):
+def test_pickup_screen_has_only_pix_and_cash_and_exact_summary_order(client):
+    login(client)
+    dashboard = client.get("/painel").text
+    assert "Cartão de débito" not in dashboard and "Cartão de crédito" not in dashboard
+    assert dashboard.count('name="payment_method"') == 2
+    labels = ["Pacotes + taxa de atraso:", "Desconto:", "Acréscimo:", "Total a pagar:"]
+    positions = [dashboard.index(label) for label in labels]
+    assert positions == sorted(positions)
+    assert "Subtotal antes do desconto" not in dashboard
+    for element_id in ("pickup-package-total", "pickup-discount", "pickup-surcharge", "pickup-total"):
+        assert f'<b id="{element_id}">R$ 0,00</b>' in dashboard
+
+
+def test_card_payment_is_rejected_for_new_pickups(app, client):
     register(client)
     login(client)
-    dashboard = client.get("/painel")
-    assert "Pacotes + taxa de atraso: <b id=\"pickup-package-total\">R$ 0,00</b>" in dashboard.text
-    assert "Cartão de débito" in dashboard.text and "Cartão de crédito" in dashboard.text
     client.post("/pacotes", data={"client_id": 1, "tracking": "CARD1", "shelf": "A1", "width": 10,
         "height": 10, "length": 10, "weight": 1, "csrf_token": token(client)})
     client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
     response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Cliente Teste",
-        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": payment_method,
-        "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)},
-        follow_redirects=True)
-    assert response.status_code == 200
-    assert payment_method in response.text
-    row = sqlite3.connect(app.config["DATABASE"]).execute(
-        "SELECT payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,total_paid FROM pickups").fetchone()
-    assert row[0] == payment_method and row[1] == 1 and row[2] and row[3] == "staff" and row[4] == 5
-    detail = client.get("/painel/pacotes/1")
-    assert payment_method in detail.text
-    pdf = client.get("/comprovantes/1/pacotes/1.pdf")
-    assert pdf.status_code == 200 and pdf.data.startswith(b"%PDF-")
+        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Cartão de crédito",
+        "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
+    assert "pagamento confirmado" in response.text
+    connection = sqlite3.connect(app.config["DATABASE"])
+    assert connection.execute("SELECT COUNT(*) FROM pickups").fetchone()[0] == 0
+    assert connection.execute("SELECT status FROM packages WHERE id=1").fetchone()[0] == "aguardando_retirada"
 
 
 def test_percentage_discount_updates_pix_and_is_saved_in_history(app, client):
@@ -422,18 +425,18 @@ def test_surcharge_precedes_discount_updates_pix_and_persists_reason(app, client
     assert summary.status_code == 200
     assert summary.json["package_total"] == 5
     assert summary.json["surcharge_amount"] == 3
-    assert summary.json["original_total"] == 8
-    assert summary.json["discount_amount"] == 2
-    assert summary.json["total"] == 6
-    assert "54046.00" in summary.json["pix_code"]
+    assert summary.json["original_total"] == 5
+    assert summary.json["discount_amount"] == 1.25
+    assert summary.json["total"] == 6.75
+    assert "54046.75" in summary.json["pix_code"]
     response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Cliente Teste",
         "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Pix",
         "payment_confirmed": "yes", "surcharge_amount": "3,00", "surcharge_reason": "Servico adicional",
         "discount_percent": "25", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
-    assert "Servico adicional" in response.text and "R$ 6,00" in response.text
+    assert "Servico adicional" in response.text and "R$ 6,75" in response.text
     row = sqlite3.connect(app.config["DATABASE"]).execute("""SELECT surcharge_amount,surcharge_reason,
         surcharge_applied_by,original_total,discount_amount,final_total,total_paid FROM pickups""").fetchone()
-    assert row == (3, "Servico adicional", "staff", 8, 2, 6, 6)
+    assert row == (3, "Servico adicional", "staff", 5, 1.25, 6.75, 6.75)
     detail = client.get("/painel/pacotes/1")
     assert "Motivo do acréscimo" in detail.text and "Servico adicional" in detail.text
     pdf = client.get("/comprovantes/1/pacotes/1.pdf")

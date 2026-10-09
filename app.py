@@ -619,8 +619,9 @@ def create_app(test_config=None):
         package_total = round(sum(item["total"] for item in totals), 2)
         try:
             surcharge_amount, surcharge_reason = validate_surcharge(request.form.get("surcharge_amount", "0"), request.form.get("surcharge_reason", ""))
-            discount_type, discount_input, discount_amount, original_total, final_total = calculate_discount(
-                Decimal(str(package_total)) + surcharge_amount, request.form.get("discount_amount", ""), request.form.get("discount_percent", ""))
+            discount_type, discount_input, discount_amount, original_total, discounted_total = calculate_discount(
+                package_total, request.form.get("discount_amount", ""), request.form.get("discount_percent", ""))
+            final_total = (discounted_total + surcharge_amount).quantize(Decimal("0.01"))
         except ValueError as error:
             return {"error": str(error)}, 400
         setting = db().execute("SELECT pix_receiver_name FROM settings WHERE id=1").fetchone()
@@ -657,7 +658,7 @@ def create_app(test_config=None):
         payment_method = request.form.get("payment_method", "")
         signature = request.form.get("pickup_signature", "")
         payment_confirmed = request.form.get("payment_confirmed") == "yes"
-        allowed_payment_methods = ("Pix", "Dinheiro", "Cartão de débito", "Cartão de crédito")
+        allowed_payment_methods = ("Pix", "Dinheiro")
         if not receiver or not valid_document(document_type, document) or payment_method not in allowed_payment_methods or not payment_confirmed or not signature.startswith("data:image/png;base64,"):
             flash("Informe nome, tipo e número do documento, pagamento confirmado e assinatura.", "error")
             return redirect(url_for("dashboard"))
@@ -688,9 +689,9 @@ def create_app(test_config=None):
             totals = [fees(package) for package in packages]
             try:
                 surcharge_amount, surcharge_reason = validate_surcharge(request.form.get("surcharge_amount", "0"), request.form.get("surcharge_reason", ""))
-                discount_type, discount_input, discount_amount, original_total, final_total = calculate_discount(
-                    Decimal(str(sum(x["total"] for x in totals))) + surcharge_amount,
-                    request.form.get("discount_amount", ""), request.form.get("discount_percent", ""))
+                discount_type, discount_input, discount_amount, original_total, discounted_total = calculate_discount(
+                    sum(x["total"] for x in totals), request.form.get("discount_amount", ""), request.form.get("discount_percent", ""))
+                final_total = (discounted_total + surcharge_amount).quantize(Decimal("0.01"))
             except ValueError as error:
                 connection.rollback()
                 flash(str(error), "error")
