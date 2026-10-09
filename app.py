@@ -657,7 +657,8 @@ def create_app(test_config=None):
         payment_method = request.form.get("payment_method", "")
         signature = request.form.get("pickup_signature", "")
         payment_confirmed = request.form.get("payment_confirmed") == "yes"
-        if not receiver or not valid_document(document_type, document) or payment_method not in ("Pix", "Dinheiro") or not payment_confirmed or not signature.startswith("data:image/png;base64,"):
+        allowed_payment_methods = ("Pix", "Dinheiro", "Cartão de débito", "Cartão de crédito")
+        if not receiver or not valid_document(document_type, document) or payment_method not in allowed_payment_methods or not payment_confirmed or not signature.startswith("data:image/png;base64,"):
             flash("Informe nome, tipo e número do documento, pagamento confirmado e assinatura.", "error")
             return redirect(url_for("dashboard"))
         placeholders = ",".join("?" * len(ids))

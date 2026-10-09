@@ -277,8 +277,15 @@ async function updatePayment() {
   const method = pickupForm.querySelector('[name="payment_method"]:checked')?.value;
   const ids = [...document.querySelectorAll('[name="package_ids"]:checked')];
   paymentBox.hidden = !method || !ids.length;
-  submitPickup.textContent = !method ? 'Selecione a forma de pagamento' : method === 'Pix' ? 'Confirmar pagamento Pix e concluir retirada' : 'Confirmar recebimento em dinheiro e concluir retirada';
-  document.querySelector('#payment-confirmation-text').textContent = method === 'Pix' ? 'Conferi o pagamento Pix na conta e confirmo o recebimento.' : 'Conferi o recebimento em dinheiro.';
+  const card = method === 'Cartão de débito' || method === 'Cartão de crédito';
+  submitPickup.textContent = !method ? 'Selecione a forma de pagamento'
+    : method === 'Pix' ? 'Confirmar pagamento Pix e concluir retirada'
+      : method === 'Dinheiro' ? 'Confirmar recebimento em dinheiro e concluir retirada'
+        : `Confirmar pagamento no ${method.toLowerCase()} e concluir retirada`;
+  document.querySelector('#payment-confirmation-text').textContent = method === 'Pix'
+    ? 'Conferi o pagamento Pix na conta e confirmo o recebimento.'
+    : method === 'Dinheiro' ? 'Conferi o recebimento em dinheiro.'
+      : card ? 'Conferi a aprovação na maquininha e confirmo o recebimento.' : 'Confirmo o recebimento.';
   pixArea.hidden = method !== 'Pix';
   if (!method || !ids.length) return;
   const body = new FormData();

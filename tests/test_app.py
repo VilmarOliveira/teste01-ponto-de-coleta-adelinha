@@ -330,6 +330,31 @@ def test_cash_pickup_saves_document_and_payment_confirmation(app, client):
     assert row[3] and row[4] == "staff"
 
 
+@pytest.mark.parametrize("payment_method", ["Cartão de débito", "Cartão de crédito"])
+def test_card_payment_is_confirmed_manually_and_kept_in_receipt_pdf(app, client, payment_method):
+    register(client)
+    login(client)
+    dashboard = client.get("/painel")
+    assert "Pacotes + taxa de atraso: <b id=\"pickup-package-total\">R$ 0,00</b>" in dashboard.text
+    assert "Cartão de débito" in dashboard.text and "Cartão de crédito" in dashboard.text
+    client.post("/pacotes", data={"client_id": 1, "tracking": "CARD1", "shelf": "A1", "width": 10,
+        "height": 10, "length": 10, "weight": 1, "csrf_token": token(client)})
+    client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
+    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Cliente Teste",
+        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": payment_method,
+        "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)},
+        follow_redirects=True)
+    assert response.status_code == 200
+    assert payment_method in response.text
+    row = sqlite3.connect(app.config["DATABASE"]).execute(
+        "SELECT payment_method,payment_confirmed,payment_confirmed_at,payment_confirmed_by,total_paid FROM pickups").fetchone()
+    assert row[0] == payment_method and row[1] == 1 and row[2] and row[3] == "staff" and row[4] == 5
+    detail = client.get("/painel/pacotes/1")
+    assert payment_method in detail.text
+    pdf = client.get("/comprovantes/1/pacotes/1.pdf")
+    assert pdf.status_code == 200 and pdf.data.startswith(b"%PDF-")
+
+
 def test_percentage_discount_updates_pix_and_is_saved_in_history(app, client):
     register(client)
     login(client)
