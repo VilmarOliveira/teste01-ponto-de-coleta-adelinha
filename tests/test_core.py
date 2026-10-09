@@ -2,13 +2,23 @@ from datetime import date
 
 import pytest
 
-from core import calculate_discount, calculate_fees, classify_package, pix_payload, validate_surcharge
+from core import calculate_discount, calculate_fees, classify_package, pix_payload, valid_cpf, validate_surcharge
 
 
 def test_pix_limits_long_holder_name_to_emv_standard():
     payload = pix_payload("38145273000105", "AMOR INFINITO MARKETING E SOLUCOES EMPRESARIAIS", 5)
     assert "5925AMOR INFINITO MARKETING" in payload
     assert "SOLUCOES EMPRESARIAIS" not in payload
+
+
+@pytest.mark.parametrize("cpf", ["52998224725", "529.982.247-25", "98765432100"])
+def test_valid_cpf_accepts_plain_or_formatted_value(cpf):
+    assert valid_cpf(cpf)
+
+
+@pytest.mark.parametrize("cpf", ["", "123", "11111111111", "52998224724", "abc"])
+def test_valid_cpf_rejects_bad_length_repeated_and_wrong_check_digits(cpf):
+    assert not valid_cpf(cpf)
 
 
 def test_discount_by_value_and_percentage_rounds_to_two_decimals():

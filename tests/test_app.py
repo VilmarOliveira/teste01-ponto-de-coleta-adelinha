@@ -29,11 +29,11 @@ def token(client):
 
 
 def register(client, name="Cliente Teste"):
-    return client.post("/cadastro", data={"name": name, "cpf": "12345678901", "phone": "16999999999", "email": "cliente@example.com", "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura", "terms_accept": "yes", "residential_cep": "14400000", "residential_street": "Rua da Cliente", "residential_number": "123", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "residential_complement": "Apto 2", "csrf_token": token(client)})
+    return client.post("/cadastro", data={"name": name, "cpf": "52998224725", "phone": "16999999999", "email": "cliente@example.com", "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura", "terms_accept": "yes", "residential_cep": "14400000", "residential_street": "Rua da Cliente", "residential_number": "123", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "residential_complement": "Apto 2", "csrf_token": token(client)})
 
 
 def test_registration_requires_and_saves_residential_address_separately(app, client):
-    response = client.post("/cadastro", data={"name": "Cliente Sem Endereco", "cpf": "12345678901",
+    response = client.post("/cadastro", data={"name": "Cliente Sem Endereco", "cpf": "52998224725",
         "phone": "16999999999", "signature": signature(), "password": "senha-segura",
         "password_confirm": "senha-segura", "terms_accept": "yes", "csrf_token": token(client)})
     assert response.status_code == 400
@@ -46,10 +46,31 @@ def test_registration_requires_and_saves_residential_address_separately(app, cli
     assert b"RUA AFONSO BORGES DE FREITAS" in response.data
 
 
+def test_registration_rejects_invalid_and_duplicate_cpf_preserving_fields(app, client):
+    common = {"name": "Cliente Preservado", "phone": "16999999999", "email": "preservado@example.com",
+        "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura",
+        "terms_accept": "yes", "residential_cep": "14400000", "residential_street": "Rua Preservada",
+        "residential_number": "77", "residential_district": "Centro", "residential_city": "Franca",
+        "residential_state": "SP", "csrf_token": token(client)}
+    invalid = client.post("/cadastro", data={**common, "cpf": "111.111.111-11"})
+    assert invalid.status_code == 400
+    assert "CPF inválido. Confira os números digitados." in invalid.text
+    assert 'value="Cliente Preservado"' in invalid.text and 'value="Rua Preservada"' in invalid.text
+    assert sqlite3.connect(app.config["DATABASE"]).execute("SELECT COUNT(*) FROM clients").fetchone()[0] == 0
+
+    first = client.post("/cadastro", data={**common, "cpf": "529.982.247-25"})
+    assert first.status_code == 200
+    duplicate = client.post("/cadastro", data={**common, "cpf": "52998224725"})
+    assert duplicate.status_code == 409
+    assert "Este CPF já possui cadastro." in duplicate.text
+    assert 'value="Cliente Preservado"' in duplicate.text and 'value="Rua Preservada"' in duplicate.text
+    assert sqlite3.connect(app.config["DATABASE"]).execute("SELECT COUNT(*) FROM clients").fetchone()[0] == 1
+
+
 def test_staff_edits_and_client_sees_both_addresses(app, client):
     register(client)
     login(client)
-    response = client.post("/painel/clientes/1/editar", data={"name": "Cliente Teste", "cpf": "12345678901",
+    response = client.post("/painel/clientes/1/editar", data={"name": "Cliente Teste", "cpf": "52998224725",
         "phone": "16999999999", "residential_cep": "14000001", "residential_street": "Rua Nova",
         "residential_number": "45", "residential_district": "Bairro Novo", "residential_city": "Franca",
         "residential_state": "sp", "residential_complement": "", "csrf_token": token(client)}, follow_redirects=True)
@@ -75,7 +96,7 @@ def test_client_edits_only_own_contact_and_residential_address(app, client):
     assert "Dados atualizados com sucesso" in response.text
     connection = sqlite3.connect(app.config["DATABASE"])
     row = connection.execute("SELECT name,cpf,phone,email,residential_street FROM clients WHERE id=1").fetchone()
-    assert row == ("Cliente Teste", "12345678901", "16977776666", "novo@example.com", "Rua Própria")
+    assert row == ("Cliente Teste", "52998224725", "16977776666", "novo@example.com", "Rua Própria")
 
 
 def test_client_edit_rejects_invalid_email_and_requires_login(app, client):
@@ -102,7 +123,7 @@ def test_public_registration_generates_id_and_keeps_sensitive_data_private(clien
     response = register(client)
     assert response.status_code == 200
     assert b"ADL-000001" in response.data
-    assert b"12345678901" not in response.data
+    assert b"52998224725" not in response.data
 
 
 def test_dashboard_requires_login(client):
@@ -183,12 +204,12 @@ def test_partial_pickup_and_duplicate_protection(app, client):
         client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": shelf, "tracking": "TRK001", "csrf_token": token(client)})
     client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
     client.post("/pacotes/2/avisar", data={"csrf_token": token(client)})
-    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Maria", "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)})
+    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Maria", "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)})
     assert response.status_code == 302
     connection = sqlite3.connect(app.config["DATABASE"])
     statuses = [row[0] for row in connection.execute("SELECT status FROM packages ORDER BY id")]
     assert statuses == ["retirado", "aguardando_retirada"]
-    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Maria", "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
+    response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Maria", "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
     assert "já possui uma retirada registrada" in response.text
 
 
@@ -200,7 +221,7 @@ def test_duplicate_package_ids_are_processed_once(app, client):
 
     response = client.post("/retiradas", data={
         "package_ids": ["1", "1"], "receiver_name": "Cliente Teste",
-        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(),
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(),
         "csrf_token": token(client),
     })
     assert response.status_code == 302
@@ -225,7 +246,7 @@ def test_second_pickup_shows_existing_receipt_without_new_rows(app, client):
     login(client)
     client.post("/pacotes", data={"client_id": 1, "width": 10, "height": 10, "length": 10, "weight": 1, "shelf": "A1", "tracking": "TRK001", "csrf_token": token(client)})
     client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
-    payload = {"package_ids": "1", "receiver_name": "Cliente Teste", "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)}
+    payload = {"package_ids": "1", "receiver_name": "Cliente Teste", "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)}
     client.post("/retiradas", data=payload)
 
     response = client.post("/retiradas", data=payload, follow_redirects=True)
@@ -246,7 +267,7 @@ def test_normal_pickup_of_multiple_distinct_packages_is_atomic(app, client):
 
     response = client.post("/retiradas", data={
         "package_ids": ["1", "2"], "receiver_name": "Terceiro",
-        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(),
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(),
         "csrf_token": token(client),
     })
     assert response.status_code == 302
@@ -271,7 +292,7 @@ def test_pickup_rolls_back_every_change_when_a_link_fails(app, client):
 
     response = client.post("/retiradas", data={
         "package_ids": ["1", "2"], "receiver_name": "Cliente Teste",
-        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(),
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Dinheiro", "payment_confirmed": "yes", "pickup_signature": signature(),
         "csrf_token": token(client),
     }, follow_redirects=True)
     assert "Nenhuma alteração foi salva" in response.text
@@ -305,7 +326,7 @@ def test_package_error_preserves_form_and_edit_is_blocked_after_notice(app, clie
 def test_admin_edits_client_changes_password_and_deactivates_with_history(app, client):
     register(client)
     login(client)
-    response = client.post("/painel/clientes/1/editar", data={"name": "Nome Atualizado", "cpf": "123.456.789-01", "phone": "16988887777", "residential_cep": "14400000", "residential_street": "Rua da Cliente", "residential_number": "123", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "csrf_token": token(client)}, follow_redirects=True)
+    response = client.post("/painel/clientes/1/editar", data={"name": "Nome Atualizado", "cpf": "529.982.247-25", "phone": "16988887777", "residential_cep": "14400000", "residential_street": "Rua da Cliente", "residential_number": "123", "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP", "csrf_token": token(client)}, follow_redirects=True)
     assert "Cadastro atualizado" in response.text
     client.post("/painel/clientes/1/senha", data={"password": "senha-nova", "password_confirm": "senha-nova", "csrf_token": token(client)})
     response = client.post("/painel/clientes/1/remover", data={"confirmation": "ADL-000001", "csrf_token": token(client)}, follow_redirects=True)
@@ -314,6 +335,20 @@ def test_admin_edits_client_changes_password_and_deactivates_with_history(app, c
     assert connection.execute("SELECT name,active,session_version FROM clients").fetchone() == ("Nome Atualizado", 0, 3)
     actions = [row[0] for row in connection.execute("SELECT action FROM audit_logs ORDER BY id")]
     assert actions == ["editar", "alterar_senha", "desativar"]
+
+
+def test_admin_edit_rejects_invalid_cpf_and_preserves_submitted_fields(app, client):
+    register(client)
+    login(client)
+    response = client.post("/painel/clientes/1/editar", data={"name": "Nome Ainda Digitado",
+        "cpf": "111.111.111-11", "phone": "16988887777", "email": "digitado@example.com",
+        "residential_cep": "14400000", "residential_street": "Rua Ainda Digitada", "residential_number": "88",
+        "residential_district": "Centro", "residential_city": "Franca", "residential_state": "SP",
+        "csrf_token": token(client)}, follow_redirects=True)
+    assert "CPF inválido. Confira os números digitados." in response.text
+    assert 'value="Nome Ainda Digitado"' in response.text and 'value="Rua Ainda Digitada"' in response.text
+    row = sqlite3.connect(app.config["DATABASE"]).execute("SELECT name,cpf FROM clients WHERE id=1").fetchone()
+    assert row == ("Cliente Teste", "52998224725")
 
 
 def test_cash_pickup_saves_document_and_payment_confirmation(app, client):
@@ -350,7 +385,7 @@ def test_card_payment_is_rejected_for_new_pickups(app, client):
         "height": 10, "length": 10, "weight": 1, "csrf_token": token(client)})
     client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
     response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Cliente Teste",
-        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Cartão de crédito",
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Cartão de crédito",
         "payment_confirmed": "yes", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
     assert "pagamento confirmado" in response.text
     connection = sqlite3.connect(app.config["DATABASE"])
@@ -374,7 +409,7 @@ def test_percentage_discount_updates_pix_and_is_saved_in_history(app, client):
     assert "54048.75" in summary.json["pix_code"]
 
     response = client.post("/retiradas", data={"package_ids": ["1", "2"], "receiver_name": "Cliente Teste",
-        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Pix",
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Pix",
         "payment_confirmed": "yes", "discount_percent": "12,5", "pickup_signature": signature(),
         "csrf_token": token(client)}, follow_redirects=True)
     assert "Total antes do desconto" in response.text
@@ -400,13 +435,13 @@ def test_fixed_discount_cash_and_invalid_discounts_are_server_validated(app, cli
             "csrf_token": token(client)})
         assert response.status_code == 400
     invalid_pickup = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Terceiro",
-        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro",
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Dinheiro",
         "payment_confirmed": "yes", "discount_amount": "1", "discount_percent": "10",
         "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
     assert "Use somente desconto" in invalid_pickup.text
     assert sqlite3.connect(app.config["DATABASE"]).execute("SELECT COUNT(*) FROM pickups").fetchone()[0] == 0
     response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Terceiro",
-        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro",
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Dinheiro",
         "payment_confirmed": "yes", "discount_amount": "2,50", "pickup_signature": signature(),
         "csrf_token": token(client)})
     assert response.status_code == 302
@@ -430,7 +465,7 @@ def test_surcharge_precedes_discount_updates_pix_and_persists_reason(app, client
     assert summary.json["total"] == 6.75
     assert "54046.75" in summary.json["pix_code"]
     response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Cliente Teste",
-        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Pix",
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Pix",
         "payment_confirmed": "yes", "surcharge_amount": "3,00", "surcharge_reason": "Servico adicional",
         "discount_percent": "25", "pickup_signature": signature(), "csrf_token": token(client)}, follow_redirects=True)
     assert "Servico adicional" in response.text and "R$ 6,75" in response.text
@@ -450,7 +485,7 @@ def test_positive_surcharge_without_reason_is_rejected_by_server(app, client):
         "height": 10, "length": 10, "weight": 1, "csrf_token": token(client)})
     client.post("/pacotes/1/avisar", data={"csrf_token": token(client)})
     response = client.post("/retiradas", data={"package_ids": "1", "receiver_name": "Cliente Teste",
-        "receiver_document": "12345678901", "document_type": "CPF", "payment_method": "Dinheiro",
+        "receiver_document": "52998224725", "document_type": "CPF", "payment_method": "Dinheiro",
         "payment_confirmed": "yes", "surcharge_amount": "1,00", "pickup_signature": signature(),
         "csrf_token": token(client)}, follow_redirects=True)
     assert "Informe o motivo do acréscimo" in response.text
@@ -460,14 +495,14 @@ def test_positive_surcharge_without_reason_is_rejected_by_server(app, client):
 
 
 def test_terms_acceptance_is_required(client):
-    response = client.post("/cadastro", data={"name": "Sem Aceite", "cpf": "12345678901", "phone": "16999999999", "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura", "csrf_token": token(client)}, follow_redirects=True)
+    response = client.post("/cadastro", data={"name": "Sem Aceite", "cpf": "52998224725", "phone": "16999999999", "signature": signature(), "password": "senha-segura", "password_confirm": "senha-segura", "csrf_token": token(client)}, follow_redirects=True)
     assert "necessário aceitar" in response.text
 
 
 def test_client_login_is_rate_limited(client):
     for _ in range(5):
-        client.post("/cliente/login", data={"cpf": "12345678901", "password": "errada", "csrf_token": token(client)})
-    response = client.post("/cliente/login", data={"cpf": "12345678901", "password": "errada", "csrf_token": token(client)}, follow_redirects=True)
+        client.post("/cliente/login", data={"cpf": "52998224725", "password": "errada", "csrf_token": token(client)})
+    response = client.post("/cliente/login", data={"cpf": "52998224725", "password": "errada", "csrf_token": token(client)}, follow_redirects=True)
     assert "Muitas tentativas" in response.text
 
 
@@ -476,7 +511,7 @@ def test_client_login_logout_and_password_is_hashed(app, client):
     connection = sqlite3.connect(app.config["DATABASE"])
     stored = connection.execute("SELECT password_hash FROM clients").fetchone()[0]
     assert stored != "senha-segura"
-    response = client.post("/cliente/login", data={"cpf": "123.456.789-01", "password": "senha-segura", "csrf_token": token(client)}, follow_redirects=True)
+    response = client.post("/cliente/login", data={"cpf": "529.982.247-25", "password": "senha-segura", "csrf_token": token(client)}, follow_redirects=True)
     assert "Olá, Cliente Teste" in response.text
     response = client.post("/cliente/sair", data={"csrf_token": token(client)}, follow_redirects=True)
     assert "Fazer meu cadastro" in response.text
@@ -530,7 +565,7 @@ def test_expired_password_link_is_rejected(app, client):
 
 
 @pytest.mark.parametrize("receiver,document", [
-    ("Cliente Teste", "12345678901"),
+    ("Cliente Teste", "52998224725"),
     ("Terceiro Autorizado", "98765432100"),
 ])
 def test_withdrawal_snapshot_detail_restart_and_pdf(app, client, receiver, document):

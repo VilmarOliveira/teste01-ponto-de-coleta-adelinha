@@ -78,6 +78,34 @@ document.querySelectorAll('[data-copy]').forEach((button) => button.addEventList
   setTimeout(() => { button.innerText = previous; }, 1500);
 }));
 
+function validCpf(value) {
+  const numbers = value.replace(/\D/g, '');
+  if (numbers.length !== 11 || /^(\d)\1{10}$/.test(numbers)) return false;
+  for (const length of [9, 10]) {
+    let total = 0;
+    for (let index = 0; index < length; index += 1) {
+      total += Number(numbers[index]) * (length + 1 - index);
+    }
+    let digit = 11 - (total % 11);
+    if (digit >= 10) digit = 0;
+    if (Number(numbers[length]) !== digit) return false;
+  }
+  return true;
+}
+
+document.querySelectorAll('[data-cpf]').forEach((field) => {
+  const validate = () => field.setCustomValidity(
+    validCpf(field.value) ? '' : 'CPF inválido. Confira os números digitados.',
+  );
+  field.addEventListener('input', () => {
+    const numbers = field.value.replace(/\D/g, '').slice(0, 11);
+    field.value = numbers.replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d)/, '$1.$2').replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+    validate();
+  });
+  field.form?.addEventListener('submit', validate);
+});
+
 // Busca residencial pelo CEP. Cada nova alteração cancela a requisição anterior
 // e limpa os dados associados, evitando misturar endereços de CEPs diferentes.
 document.querySelectorAll('[data-cep-form]').forEach((container) => {

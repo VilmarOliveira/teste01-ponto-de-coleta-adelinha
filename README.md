@@ -148,6 +148,7 @@ A inicialização acrescenta, sem apagar tabelas, os campos de cliente ativo e v
 ## Regras implementadas
 
 - ID de cliente `ADL-000001` e pacote `PCT-000001` sequenciais.
+- CPF aceito com ou sem pontuação, validado pelos dígitos verificadores e bloqueado quando já pertence a outro cadastro.
 - Aceite guarda versão, assinatura e data/hora em `America/Sao_Paulo`.
 - Pequeno: soma ≤ 80 cm **e** peso ≤ 10 kg; grande: soma ≤ 150 cm **e** peso ≤ 20 kg; acima disso é recusado.
 - Confirmação explícita inicia o prazo; abrir/reabrir WhatsApp não o altera.

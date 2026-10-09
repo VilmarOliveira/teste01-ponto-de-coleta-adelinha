@@ -10,6 +10,21 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 TZ = ZoneInfo("America/Sao_Paulo")
 
 
+def valid_cpf(value):
+    """Valida a estrutura e os dois dígitos verificadores de um CPF."""
+    numbers = "".join(character for character in str(value) if character.isdigit())
+    if len(numbers) != 11 or len(set(numbers)) == 1:
+        return False
+    for length in (9, 10):
+        total = sum(int(numbers[index]) * (length + 1 - index) for index in range(length))
+        digit = 11 - total % 11
+        if digit >= 10:
+            digit = 0
+        if int(numbers[length]) != digit:
+            return False
+    return True
+
+
 def calculate_discount(total, amount_text="", percent_text=""):
     """Valida uma modalidade de desconto e calcula totais com duas casas."""
     amount_text, percent_text = str(amount_text).strip(), str(percent_text).strip()

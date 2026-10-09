@@ -19,7 +19,7 @@ from reportlab.pdfgen import canvas
 import qrcode
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from core import TZ, calculate_discount, calculate_fees, classify_package, pix_payload, validate_surcharge
+from core import TZ, calculate_discount, calculate_fees, classify_package, pix_payload, valid_cpf, validate_surcharge
 
 ROOT = Path(__file__).parent
 TERMS_VERSION = "MINUTA-TESTE-v1"
@@ -205,14 +205,17 @@ def create_app(test_config=None):
         if request.form.get("terms_accept") != "yes":
             flash("É necessário aceitar as condições do serviço.", "error")
             return redirect(url_for("index") + "#cadastro")
-        if len(name) < 5 or len(cpf) != 11 or len(phone) < 10 or not valid_email(email) or not signature.startswith("data:image/png;base64,") or len(password) < 8 or password != request.form.get("password_confirm") or not valid_residential_address(residential):
+        form = {"name": name, "cpf": request.form.get("cpf", ""), "phone": request.form.get("phone", ""), "email": email, **residential}
+        if not valid_cpf(cpf):
+            flash("CPF inválido. Confira os números digitados.", "error")
+            return render_template("index.html", registration_form=form), 400
+        if len(name) < 5 or len(phone) < 10 or not valid_email(email) or not signature.startswith("data:image/png;base64,") or len(password) < 8 or password != request.form.get("password_confirm") or not valid_residential_address(residential):
             flash("Confira os dados, o e-mail, o endereço residencial obrigatório, a assinatura e as senhas (mínimo de 8 caracteres).", "error")
-            form = {"name": name, "cpf": request.form.get("cpf", ""), "phone": request.form.get("phone", ""), "email": email, **residential}
             return render_template("index.html", registration_form=form), 400
         accepted_at = now().isoformat()
-        if db().execute("SELECT 1 FROM clients WHERE cpf=?", (cpf,)).fetchone():
-            flash("Já existe cadastro com este CPF. Procure a equipe para recuperar a senha.", "error")
-            return redirect(url_for("client_login"))
+        if db().execute("SELECT 1 FROM clients WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=?", (cpf,)).fetchone():
+            flash("Este CPF já possui cadastro.", "error")
+            return render_template("index.html", registration_form=form), 409
         cur = db().execute(
             """INSERT INTO clients(name, cpf, phone, terms_version, terms_text, signature, accepted_at, password_hash,
                residential_cep,residential_street,residential_number,residential_district,residential_city,residential_state,residential_complement,email)
@@ -264,7 +267,8 @@ def create_app(test_config=None):
         if login_blocked("client", cpf):
             flash("Muitas tentativas. Aguarde 15 minutos.", "error")
             return redirect(url_for("client_login"))
-        client = db().execute("SELECT id,password_hash,active,session_version FROM clients WHERE cpf=?", (cpf,)).fetchone()
+        client = db().execute("""SELECT id,password_hash,active,session_version FROM clients
+            WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=?""", (cpf,)).fetchone()
         valid = bool(client and client["active"] and client["password_hash"] and check_password_hash(client["password_hash"], request.form.get("password", "")))
         record_login("client", cpf, valid)
         if valid:
@@ -369,7 +373,8 @@ def create_app(test_config=None):
         packages = db().execute("SELECT * FROM packages WHERE client_id=? ORDER BY created_at DESC", (client_id,)).fetchall()
         pending_count = db().execute("SELECT COUNT(*) FROM packages WHERE client_id=? AND status!='retirado'", (client_id,)).fetchone()[0]
         linked_count = db().execute("SELECT COUNT(*) FROM packages WHERE client_id=?", (client_id,)).fetchone()[0]
-        return render_template("staff_client.html", client=client, packages=packages, pending_count=pending_count, linked_count=linked_count)
+        edit_form = session.pop(f"client_edit_form_{client_id}", None)
+        return render_template("staff_client.html", client=client, edit_form=edit_form, packages=packages, pending_count=pending_count, linked_count=linked_count)
 
     @app.post("/painel/clientes/<int:client_id>/editar")
     @login_required
@@ -381,9 +386,20 @@ def create_app(test_config=None):
         cpf, phone = digits(request.form.get("cpf", "")), digits(request.form.get("phone", ""))
         email = request.form.get("email", "").strip().lower()
         residential = residential_address_form()
-        duplicate = db().execute("SELECT 1 FROM clients WHERE cpf=? AND id!=?", (cpf, client_id)).fetchone()
-        if len(name) < 5 or len(cpf) != 11 or len(phone) < 10 or not valid_email(email) or duplicate or not valid_residential_address(residential):
-            flash("Confira nome, CPF, WhatsApp, e-mail e todos os campos obrigatórios do endereço residencial. O CPF não pode estar em outro cadastro.", "error")
+        edit_form = {"name": name, "cpf": request.form.get("cpf", ""), "phone": request.form.get("phone", ""), "email": email, **residential}
+        if not valid_cpf(cpf):
+            session[f"client_edit_form_{client_id}"] = edit_form
+            flash("CPF inválido. Confira os números digitados.", "error")
+            return redirect(url_for("staff_client", client_id=client_id))
+        duplicate = db().execute("""SELECT 1 FROM clients
+            WHERE REPLACE(REPLACE(REPLACE(cpf,'.',''),'-',''),' ','')=? AND id!=?""", (cpf, client_id)).fetchone()
+        if duplicate:
+            session[f"client_edit_form_{client_id}"] = edit_form
+            flash("Este CPF já possui cadastro.", "error")
+            return redirect(url_for("staff_client", client_id=client_id))
+        if len(name) < 5 or len(phone) < 10 or not valid_email(email) or not valid_residential_address(residential):
+            session[f"client_edit_form_{client_id}"] = edit_form
+            flash("Confira nome, WhatsApp, e-mail e todos os campos obrigatórios do endereço residencial.", "error")
             return redirect(url_for("staff_client", client_id=client_id))
         db().execute("""UPDATE clients SET name=?,cpf=?,phone=?,email=?,residential_cep=?,residential_street=?,residential_number=?,
             residential_district=?,residential_city=?,residential_state=?,residential_complement=? WHERE id=?""",
